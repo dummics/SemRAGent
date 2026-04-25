@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from workspace_docs_mcp.catalog import Catalog
 from workspace_docs_mcp.config import load_config
+from workspace_docs_mcp.freshness import IndexFreshnessService
 from workspace_docs_mcp.mcp_server import call_tool
 from workspace_docs_mcp.search import Retriever
 from workspace_docs_mcp.vector import VectorIndex
@@ -68,6 +69,43 @@ class CatalogSearchTests(unittest.TestCase):
             self.assertEqual(path_result["results"][0]["path"], "docs/server/canonical.md")
             self.assertEqual(path_result["results"][0]["source_kind"], "catalog_path")
             self.assertTrue(any(item["path"] == "docs/server/canonical.md" for item in config_key_result["results"]))
+
+    def test_rebuild_commits_catalog_before_vector_rebuild(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            docs = root / "docs" / "server"
+            docs.mkdir(parents=True)
+            (root / ".workspace-docs").mkdir()
+            (root / ".workspace-docs" / "locator.config.yml").write_text("version: 1\n", encoding="utf-8")
+            (docs / "canonical.md").write_text("# Canonical Activation\n\nLicenseActivationHandler lives here.\n", encoding="utf-8")
+            config = load_config(root)
+
+            def vector_rebuild_reads_from_fresh_connection(_conn):
+                stats = Catalog(config).stats()
+                exact = Retriever(config).exact("docs/server/canonical.md")
+                self.assertGreater(stats["documents"], 0)
+                self.assertGreater(stats["chunks"], 0)
+                self.assertEqual(exact["confidence"], "high")
+                return {"enabled": False, "reason": "unit-test"}
+
+            with patch("workspace_docs_mcp.catalog.VectorIndex.rebuild_from_sqlite", side_effect=vector_rebuild_reads_from_fresh_connection):
+                Catalog(config).rebuild()
+
+    def test_status_marks_exact_available_when_semantic_build_not_completed(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            self.build_basic_catalog(root)
+            config = load_config(root)
+            with Catalog(config).connect() as conn:
+                conn.execute("DELETE FROM index_runs")
+
+            with patch.object(VectorIndex, "available", return_value=(True, None)), patch.object(IndexFreshnessService, "qdrant_counts", return_value={"documents": 10, "chunks": 0}):
+                status = IndexFreshnessService(config).status(allow_auto_start=False)
+
+            self.assertEqual(status["state"], "blocked")
+            self.assertTrue(status["catalog_available_for_exact"])
+            self.assertTrue(status["exact_available"])
+            self.assertIn("semantic_index_not_completed", status["reasons"])
 
     def test_open_blocks_path_traversal(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:

@@ -192,6 +192,13 @@ class Catalog:
             self.load_routes(conn)
             self.load_entities(conn)
             self.extract_symbols(conn)
+
+        # Commit the deterministic SQLite catalog before the heavier vector rebuild.
+        # This keeps exact/path lookups usable while Qdrant is still being populated.
+        with self.connect() as conn:
+            vector_result = VectorIndex(self.config).rebuild_from_sqlite(conn)
+
+        with self.connect() as conn:
             conn.execute(
                 "INSERT INTO index_runs(run_id,started_at,completed_at,git_commit,embedding_model,embedding_backend,reranker_model,reranker_backend,chunker_version,docs_count,chunks_count,errors_json,warnings_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
@@ -210,7 +217,6 @@ class Catalog:
                     json.dumps(warnings[:500]),
                 ),
             )
-            vector_result = VectorIndex(self.config).rebuild_from_sqlite(conn)
         return {"docs": len(docs), "chunks": len(chunks), "warnings": warnings, "errors": errors, "sqlite": str(self.path), "qdrant": vector_result}
 
     def update(self) -> dict[str, Any]:

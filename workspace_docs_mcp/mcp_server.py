@@ -108,7 +108,8 @@ def owner_action(index_status: dict[str, Any]) -> str:
         if background.get("log_path"):
             detail.append(f"log={background['log_path']}")
         suffix = f" ({', '.join(detail)})" if detail else ""
-        return f"Background indexing is running; retry the same find_docs/locate_topic query after retry_after_seconds.{suffix}"
+        exact_note = " Catalog/exact lookup is available for explicit paths or symbols only." if index_status.get("exact_available") else ""
+        return f"Background semantic indexing is running; retry the same find_docs/locate_topic query after retry_after_seconds.{suffix}{exact_note}"
     if "qdrant_unavailable" in index_status.get("reasons", []):
         return "Start Qdrant at the configured URL, then run workspace-docs index build."
     return "Run workspace-docs index build or fix the reported model/index blocker. No fallback model is allowed."
@@ -156,6 +157,8 @@ def compact_index_status(status: dict[str, Any]) -> dict[str, Any]:
         "safe_to_use": status.get("safe_to_use"),
         "warnings": status.get("warnings", [])[:5],
         "changed_files_count": status.get("changed_files_count", 0),
+        "catalog_available_for_exact": bool(status.get("catalog_available_for_exact")),
+        "exact_available": bool(status.get("exact_available")),
         "qdrant_counts": status.get("qdrant_counts", {}),
         "background_index": {
             "state": (status.get("background_index") or {}).get("state"),

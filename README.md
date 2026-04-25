@@ -22,7 +22,7 @@ Agents often waste tokens and time reading random files or running broad text se
 2. Open only the returned citation with `open_doc`.
 3. Escalate to the owner if the semantic index is blocked.
 
-`search_exact` exists for explicit symbols/paths/config keys, but it is not a fallback when semantic search is blocked.
+`search_exact` exists for explicit symbols/paths/config keys. It is not a semantic fallback, but it can stay available during a background semantic rebuild once the SQLite catalog has been committed.
 
 ## Features
 
@@ -36,6 +36,7 @@ Agents often waste tokens and time reading random files or running broad text se
 - Section-first search for `locate_topic`.
 - Glossary/entity retrieval for definitions and naming/domain-model queries.
 - Background indexing hints with explicit `owner_action` when blocked.
+- SQLite catalog is committed before Qdrant rebuild, so explicit path/symbol lookup can work while vectors are still building.
 - Compact JSON output with scores rounded to `0.000..1.000`.
 - Windows-friendly scripts plus normal Python entrypoints.
 
@@ -145,6 +146,7 @@ Add this short policy to the target agent instructions:
 - Do not use shell search or broad `rg` as fallback when the semantic index is blocked.
 - If `search_mode=blocked`, follow `owner_action`.
 - Use `search_exact` only for explicit symbol/path/config-key lookups.
+- If `index_status.exact_available=true`, exact lookup is allowed only for those explicit terms; otherwise retry `find_docs` / `locate_topic` after `retry_after_seconds`.
 
 ## Project Config
 
@@ -185,6 +187,8 @@ Common blockers:
 - The index is incompatible after model/backend/config changes.
 
 When MCP search is blocked, the response includes `owner_action`. Agents should not invent fallback behavior.
+
+During indexing, `find_docs` and `locate_topic` can remain blocked until Qdrant document and section collections are complete. The SQLite catalog is committed first; if `index_status.exact_available=true`, `search_exact` may resolve explicit paths, symbols, route IDs, or config keys while semantic retrieval finishes.
 
 ## Security Model
 
