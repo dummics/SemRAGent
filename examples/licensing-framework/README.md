@@ -1,6 +1,6 @@
 # Licensing Framework Example Adapter
 
-This folder keeps the real project-specific configuration that motivated `workspace-docs-mcp`.
+This folder keeps the real project-specific configuration that motivated SemRAGent.
 
 It is intentionally an example fixture, not core logic.
 

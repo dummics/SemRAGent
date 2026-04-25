@@ -1,5 +1,5 @@
 param(
-    [string]$StorageDir = "$env:USERPROFILE\.workspace-docs-mcp\qdrant",
+    [string]$StorageDir = "$env:USERPROFILE\.semragent\qdrant",
     [int]$Port = 6333,
     [string]$ContainerName = "workspace-docs-qdrant"
 )

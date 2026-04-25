@@ -75,9 +75,9 @@ See [Agent Install In 5 Minutes](docs/AGENT_INSTALL.md) for a compact setup prom
 Recommended for Codex/Claude users on Windows:
 
 ```powershell
-git clone https://github.com/dummics/workspace-docs-mcp.git "$env:USERPROFILE\.workspace-docs-mcp"
-& "$env:USERPROFILE\.workspace-docs-mcp\scripts\install.ps1" -WithCuda -StartQdrant
-& "$env:USERPROFILE\.workspace-docs-mcp\scripts\setup-workspace.ps1" -Workspace "C:\path\to\your\repo" -Preset generic -BuildIndex
+git clone https://github.com/dummics/SemRAGent.git "$env:USERPROFILE\.semragent"
+& "$env:USERPROFILE\.semragent\scripts\install.ps1" -WithCuda -StartQdrant
+& "$env:USERPROFILE\.semragent\scripts\setup-workspace.ps1" -Workspace "C:\path\to\your\repo" -Preset generic -BuildIndex
 ```
 
 Use `-CpuOnly` instead of `-WithCuda` if the machine has no NVIDIA/CUDA setup. CPU mode works, but first indexing and reranking can be slow on large workspaces.
@@ -85,9 +85,9 @@ Use `-CpuOnly` instead of `-WithCuda` if the machine has no NVIDIA/CUDA setup. C
 The installer creates stable wrappers, including the new SemRAGent CLI and legacy aliases:
 
 ```text
-%USERPROFILE%\.workspace-docs-mcp\bin\semragent.cmd
-%USERPROFILE%\.workspace-docs-mcp\bin\workspace-docs.cmd
-%USERPROFILE%\.workspace-docs-mcp\bin\workspace-docs-mcp.cmd
+%USERPROFILE%\.semragent\bin\semragent.cmd
+%USERPROFILE%\.semragent\bin\workspace-docs.cmd
+%USERPROFILE%\.semragent\bin\workspace-docs-mcp.cmd
 ```
 
 Use those wrapper paths in MCP config so agents do not need an activated shell or a manual virtualenv.
@@ -97,8 +97,8 @@ Use those wrapper paths in MCP config so agents do not need an activated shell o
 From source:
 
 ```powershell
-git clone https://github.com/dummics/workspace-docs-mcp.git
-cd workspace-docs-mcp
+git clone https://github.com/dummics/SemRAGent.git
+cd SemRAGent
 python -m pip install -e ".[vector,models,yaml,mcp]"
 ```
 
@@ -129,17 +129,17 @@ semragent search "where is the architecture overview?"
 semragent mcp
 ```
 
-Compatibility note: the public product name is SemRAGent, but the Python package and repository are still `workspace-docs-mcp` for this MVP. Legacy commands remain available while the project migrates:
+Compatibility note: the public product/repository name is SemRAGent, but the Python package is still `workspace-docs-mcp` for this MVP. Legacy commands remain available while the package migrates:
 
 - `semragent` is the preferred CLI.
 - `workspace-docs` remains a legacy CLI alias.
 - `workspace-docs-mcp` remains a legacy MCP entrypoint.
-- TODO: consider a non-breaking package/repo rename after external testing.
+- TODO: consider a non-breaking Python package rename after external testing.
 
 For an agent-managed setup, give the agent this compact instruction:
 
 ```text
-Install SemRAGent / workspace-docs-mcp from https://github.com/dummics/workspace-docs-mcp.
+Install SemRAGent from https://github.com/dummics/SemRAGent.
 Ask me only if you cannot infer:
 - target workspace path;
 - CUDA/NVIDIA vs CPU-only;
@@ -150,7 +150,7 @@ Use the Windows installer when on Windows. Configure the MCP server named semrag
 Without installing, from a source checkout:
 
 ```powershell
-$tool = "C:\path\to\workspace-docs-mcp"
+$tool = "C:\path\to\SemRAGent"
 $env:PYTHONPATH = $tool
 python -m workspace_docs_mcp.cli --root "C:\path\to\workspace" init
 python -m workspace_docs_mcp.cli --root "C:\path\to\workspace" models doctor

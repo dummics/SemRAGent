@@ -1,8 +1,8 @@
 #!/usr/bin/env sh
 set -eu
 
-INSTALL_DIR="${INSTALL_DIR:-"$HOME/.workspace-docs-mcp"}"
-REPO_URL="${REPO_URL:-"https://github.com/dummics/workspace-docs-mcp.git"}"
+INSTALL_DIR="${INSTALL_DIR:-"$HOME/.semragent"}"
+REPO_URL="${REPO_URL:-"https://github.com/dummics/SemRAGent.git"}"
 MODE="${1:-all}"
 
 if ! command -v git >/dev/null 2>&1; then
@@ -49,7 +49,7 @@ exec "$PY" -c "from workspace_docs_mcp.cli import mcp_main; raise SystemExit(mcp
 EOF
 chmod +x "$INSTALL_DIR/bin/semragent" "$INSTALL_DIR/bin/workspace-docs" "$INSTALL_DIR/bin/workspace-docs-mcp"
 
-echo "[OK] Installed workspace-docs-mcp in $INSTALL_DIR"
+echo "[OK] Installed SemRAGent in $INSTALL_DIR"
 echo "CLI: $INSTALL_DIR/bin/semragent"
 echo "CLI: $INSTALL_DIR/bin/workspace-docs"
 echo "MCP: $INSTALL_DIR/bin/workspace-docs-mcp"

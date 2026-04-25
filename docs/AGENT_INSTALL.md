@@ -13,9 +13,9 @@ Ask only when you cannot infer:
 ## Windows
 
 ```powershell
-git clone https://github.com/dummics/workspace-docs-mcp.git "$env:USERPROFILE\.workspace-docs-mcp"
-& "$env:USERPROFILE\.workspace-docs-mcp\scripts\install.ps1" -WithCuda -StartQdrant
-& "$env:USERPROFILE\.workspace-docs-mcp\scripts\setup-workspace.ps1" -Workspace "C:\path\to\workspace" -Preset generic -BuildIndex
+git clone https://github.com/dummics/SemRAGent.git "$env:USERPROFILE\.semragent"
+& "$env:USERPROFILE\.semragent\scripts\install.ps1" -WithCuda -StartQdrant
+& "$env:USERPROFILE\.semragent\scripts\setup-workspace.ps1" -Workspace "C:\path\to\workspace" -Preset generic -BuildIndex
 ```
 
 Use `-CpuOnly` instead of `-WithCuda` when there is no NVIDIA/CUDA setup.
@@ -23,12 +23,12 @@ Use `-CpuOnly` instead of `-WithCuda` when there is no NVIDIA/CUDA setup.
 ## macOS / Linux
 
 ```sh
-git clone https://github.com/dummics/workspace-docs-mcp.git "$HOME/.workspace-docs-mcp"
-sh "$HOME/.workspace-docs-mcp/scripts/install.sh"
-"$HOME/.workspace-docs-mcp/bin/semragent" --root "/path/to/workspace" init --preset generic
-"$HOME/.workspace-docs-mcp/bin/semragent" --root "/path/to/workspace" qdrant status
-"$HOME/.workspace-docs-mcp/bin/semragent" --root "/path/to/workspace" models doctor
-"$HOME/.workspace-docs-mcp/bin/semragent" --root "/path/to/workspace" index build
+git clone https://github.com/dummics/SemRAGent.git "$HOME/.semragent"
+sh "$HOME/.semragent/scripts/install.sh"
+"$HOME/.semragent/bin/semragent" --root "/path/to/workspace" init --preset generic
+"$HOME/.semragent/bin/semragent" --root "/path/to/workspace" qdrant status
+"$HOME/.semragent/bin/semragent" --root "/path/to/workspace" models doctor
+"$HOME/.semragent/bin/semragent" --root "/path/to/workspace" index build
 ```
 
 ## MCP Config

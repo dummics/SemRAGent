@@ -3,7 +3,7 @@ param(
     [string]$Workspace,
     [ValidateSet("generic", "python", "node", "dotnet", "unity")]
     [string]$Preset = "generic",
-    [string]$ToolDir = "$env:USERPROFILE\.workspace-docs-mcp",
+    [string]$ToolDir = "$env:USERPROFILE\.semragent",
     [switch]$BuildIndex,
     [switch]$NoModelsDoctor,
     [switch]$StartQdrant
@@ -76,4 +76,4 @@ Write-Host "    }"
 Write-Host "  }"
 Write-Host "}"
 Write-Host ""
-Warn "Restart the agent after editing MCP config so it loads workspace-docs-mcp."
+Warn "Restart the agent after editing MCP config so it loads SemRAGent."

@@ -1,6 +1,6 @@
 param(
-    [string]$InstallDir = "$env:USERPROFILE\.workspace-docs-mcp",
-    [string]$RepoUrl = "https://github.com/dummics/workspace-docs-mcp.git",
+    [string]$InstallDir = "$env:USERPROFILE\.semragent",
+    [string]$RepoUrl = "https://github.com/dummics/SemRAGent.git",
     [switch]$WithCuda,
     [switch]$CpuOnly,
     [switch]$StartQdrant,
@@ -25,7 +25,7 @@ $pythonVersion = python -c "import sys; print(f'{sys.version_info.major}.{sys.ve
 if ([version]$pythonVersion -lt [version]"3.11") { Fail "Python 3.11+ is required. Found $pythonVersion." }
 Ok "Python $pythonVersion"
 
-Step "Cloning or updating workspace-docs-mcp"
+Step "Cloning or updating SemRAGent"
 if (Test-Path -LiteralPath (Join-Path $InstallDir ".git")) {
     git -C $InstallDir pull --ff-only
 } elseif (Test-Path -LiteralPath $InstallDir) {
@@ -58,7 +58,7 @@ if ($WithCuda) {
 Step "Installing package"
 $Extra = if ($Dev) { ".[dev,all]" } else { ".[all]" }
 & $Python -m pip install -e "$InstallDir$Extra"
-Ok "Installed workspace-docs-mcp"
+Ok "Installed SemRAGent"
 
 Step "Creating stable command wrappers"
 $BinDir = Join-Path $InstallDir "bin"
