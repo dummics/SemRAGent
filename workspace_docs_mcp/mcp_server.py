@@ -70,6 +70,7 @@ def call_tool(config_or_context: LocatorConfig | RuntimeContext, name: str, args
             "mode": "read-only",
             "agent_pattern": "Use find_docs or locate_topic first, then open_doc only for returned citations.",
             "sqlite": str(config.sqlite_path),
+            "indexed_root": str(config.root),
             "catalog": compact_catalog_stats(Catalog(config).stats()),
             "index_status": compact_index_status(index_status),
             "qdrant_available": qdrant_ok,
@@ -226,6 +227,9 @@ def compact_index_status(status: dict[str, Any]) -> dict[str, Any]:
     return {
         "state": status.get("state"),
         "safe_to_use": status.get("safe_to_use"),
+        "indexed_root": status.get("indexed_root"),
+        "runtime_cwd": status.get("runtime_cwd"),
+        "git_top_level": status.get("git_top_level"),
         "warnings": status.get("warnings", [])[:5],
         "changed_files_count": status.get("changed_files_count", 0),
         "catalog_available_for_exact": bool(status.get("catalog_available_for_exact")),

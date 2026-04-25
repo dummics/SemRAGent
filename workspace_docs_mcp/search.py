@@ -21,6 +21,15 @@ def tokenize(text: str) -> list[str]:
     return [t.lower() for t in TOKEN_RE.findall(text)]
 
 
+def fts_match_query(text: str) -> str:
+    terms = []
+    for term in tokenize(text):
+        clean = term.replace('"', '""')
+        if clean:
+            terms.append(f'"{clean}"')
+    return " OR ".join(terms) or '""'
+
+
 def score(value: float | None) -> float | None:
     return format_score(value)
 
@@ -90,6 +99,7 @@ class Retriever:
             rerank_warning = self.try_rerank(query, results)
             if rerank_warning:
                 warnings.append(rerank_warning)
+        self.apply_post_rerank_policy(results, query)
         results.sort(key=lambda r: r.score, reverse=True)
         if dedupe_documents:
             best_by_path: dict[str, SearchResult] = {}
@@ -158,14 +168,13 @@ class Retriever:
             filters.append("doc_type=?")
             params.append(doc_type)
         where = " AND ".join(filters)
-        fts_query = " OR ".join(tokenize(query)) or query
+        fts_query = fts_match_query(query)
         if mode == "documents":
             sql = f"""
             SELECT c.*, bm25(chunks_fts) AS rank
             FROM chunks_fts
             JOIN chunks c ON c.chunk_id = chunks_fts.chunk_id
             WHERE chunks_fts MATCH ? AND {where}
-            GROUP BY c.path
             ORDER BY rank LIMIT ?
         """
         else:
@@ -182,6 +191,15 @@ class Retriever:
                 rows = conn.execute(sql, [fts_query, *params, limit]).fetchall()
             except Exception:
                 rows = conn.execute(f"SELECT * FROM chunks WHERE {where} LIMIT ?", [*params, limit]).fetchall()
+            if mode == "documents":
+                seen_paths: set[str] = set()
+                deduped = []
+                for row in rows:
+                    if row["path"] in seen_paths:
+                        continue
+                    seen_paths.add(row["path"])
+                    deduped.append(row)
+                rows = deduped
             for row in rows:
                 lexical = 1.0 / (1.0 + abs(float(row["rank"]))) if "rank" in row.keys() else 0.35
                 out.append(self.row_to_result(row, query, lexical_score=lexical, why=["lexical match"]))
@@ -292,6 +310,8 @@ class Retriever:
                     continue
                 alias_terms = set(tokenize(str(row["alias"]) + " " + str(row["title"]) + " " + str(row["path"])))
                 overlap = len(query_terms.intersection(alias_terms)) / max(1, len(query_terms))
+                if overlap < 0.25:
+                    continue
                 out.append(self.row_to_result(row, query, exact_score=max(0.55, min(0.85, overlap)), why=["partial alias match"]))
             path_rows = conn.execute(
                 f"SELECT * FROM chunks WHERE lower(path) LIKE ? AND {status_clause} ORDER BY authority DESC LIMIT 20",
@@ -309,7 +329,7 @@ class Retriever:
         if not terms:
             return []
         definition_intent = any(term in {"what", "what's", "cos", "cosa", "definition", "definizione", "define", "naming", "domain", "model", "term", "terms"} for term in terms)
-        fts_query = " OR ".join(terms)
+        fts_query = fts_match_query(query)
         out: list[SearchResult] = []
         with self.catalog.connect() as conn:
             rows = conn.execute(
@@ -389,7 +409,7 @@ class Retriever:
             if not matched_areas:
                 return []
             query_terms = [term for term in bridge_terms if len(term) > 2 and re.match(r"^[A-Za-z0-9_]+$", term)][:12]
-            fts_query = " OR ".join(query_terms) or query
+            fts_query = fts_match_query(" ".join(query_terms) or query)
             area_filter = ""
             area_params: list[Any] = []
             if repo_area and repo_area != "any":
@@ -419,6 +439,10 @@ class Retriever:
             out: list[SearchResult] = []
             for row in rows:
                 lexical = 1.0 / (1.0 + abs(float(row["rank"]))) if "rank" in row.keys() else 0.35
+                row_terms = set(tokenize(f"{row['title']} {row['path']} {row['text']}"))
+                query_overlap = len(set(terms).intersection(row_terms))
+                if query_overlap < 2:
+                    continue
                 title_path = f"{row['title']} {row['path']}".lower()
                 title_boost = 0.12 if any(term in title_path for term in terms if len(term) > 3) else 0.0
                 result = self.row_to_result(row, query, lexical_score=min(1.0, lexical + title_boost), exact_score=0.50 + title_boost, why=["code symbol/config bridge", "repo-area match"])
@@ -465,7 +489,7 @@ class Retriever:
                 policy = 0.05
             elif r.status == "generated":
                 r.policy_adjustments.append("generated_lower_priority")
-                policy = -0.04
+                policy = -0.10
             elif r.status == "historical":
                 r.policy_adjustments.append("historical_suppressed")
                 policy = -0.20
@@ -473,11 +497,21 @@ class Retriever:
                 policy = 0.0
             if self.is_overview_query(query) and self.is_overview_result(r):
                 r.policy_adjustments.append("overview_intent_boost")
-                policy += 0.12
+                policy += 0.22 if r.path.lower().endswith("readme.md") else 0.16
                 r.exact_score = max(r.exact_score, 0.70)
+            elif self.is_overview_query(query):
+                r.policy_adjustments.append("non_overview_result_penalty")
+                policy -= 0.06
             if self.is_overview_query(query) and "package-format" in r.path.lower():
                 r.policy_adjustments.append("specific_reference_penalty")
                 policy -= 0.10
+            if self.is_generated_or_test_result(r) and not self.is_test_or_code_query(query):
+                r.policy_adjustments.append("generated_or_test_doc_penalty")
+                policy -= 0.18
+            overlap = self.query_result_overlap(terms, r)
+            if overlap >= 0.30:
+                r.policy_adjustments.append("query_term_overlap_boost")
+                policy += min(0.12, 0.18 * overlap)
             rrf = self.rrf_from_ranks(r.generator_ranks)
             r.score = max(
                 0.0,
@@ -492,6 +526,22 @@ class Retriever:
                     + policy,
                 ),
             )
+
+    def apply_post_rerank_policy(self, results: list[SearchResult], query: str) -> None:
+        for result in results:
+            adjustment = 0.0
+            if result.status == "canonical":
+                adjustment += 0.035
+            elif result.status == "runbook":
+                adjustment += 0.025
+            elif result.status == "generated":
+                adjustment -= 0.080
+            if self.is_generated_or_test_result(result) and not self.is_test_or_code_query(query):
+                adjustment -= 0.140
+                if "generated_or_test_doc_suppressed_after_rerank" not in result.policy_adjustments:
+                    result.policy_adjustments.append("generated_or_test_doc_suppressed_after_rerank")
+            if adjustment:
+                result.score = max(0.0, min(1.0, result.score + adjustment))
 
     def rrf_from_ranks(self, ranks: dict[str, int]) -> float:
         if not ranks:
@@ -587,13 +637,38 @@ class Retriever:
 
     def is_overview_query(self, query: str) -> bool:
         terms = set(tokenize(query))
-        return bool(terms.intersection({"overview", "architecture", "architettura", "generale", "system", "sistema", "componenti", "components", "meta"}))
+        return bool(terms.intersection({"overview", "architecture", "architettura", "general", "generale", "system", "sistema"}))
 
     def is_overview_result(self, result: SearchResult) -> bool:
         haystack = f"{result.path} {result.title} {' '.join(result.heading_path)}".lower()
         if "package-format" in haystack or "/reference/" in haystack:
             return False
         return any(marker in haystack for marker in ["readme", "overview", "system-overview", "architecture/index", "server/index", "client/architecture", "docs/index"])
+
+    def is_test_or_code_query(self, query: str) -> bool:
+        terms = set(tokenize(query))
+        return bool(terms.intersection({"test", "tests", "unit", "integration", "spec", "fixture", "mock", "class", "method", "symbol", "source", "code"}))
+
+    def is_generated_or_test_result(self, result: SearchResult) -> bool:
+        path = result.path.replace("\\", "/").lower()
+        title = result.title.lower()
+        return (
+            result.status == "generated"
+            or path.startswith("catalog/generated/")
+            or "/generated/" in path
+            or path.startswith("docs/tests/")
+            or "/docs/tests/" in path
+            or "/test/" in path
+            or "/tests/" in path
+            or title.endswith("tests")
+        )
+
+    def query_result_overlap(self, terms: set[str], result: SearchResult) -> float:
+        useful_terms = {term for term in terms if len(term) > 2 and term not in {"server", "client", "component", "components", "project", "workspace"}}
+        if not useful_terms:
+            return 0.0
+        haystack = set(tokenize(f"{result.title} {' '.join(result.heading_path)} {result.snippet} {result.path}"))
+        return len(useful_terms.intersection(haystack)) / max(1, len(useful_terms))
 
     def overview_candidates(self, query: str, repo_area: str | None, doc_type: str | None, include_historical: bool, mode: str = "sections") -> list[SearchResult]:
         if not self.is_overview_query(query):
@@ -795,7 +870,7 @@ class Retriever:
             add_result({"path": row["path"], "line_number": row["line_number"], "snippet": snippet(row["snippet"], term_text), "source_kind": row["source_kind"], "related_canonical_docs": []})
 
     def add_source_fts_results(self, conn: Any, term_text: str, repo_area: str | None, include_historical: bool, max_results: int, add_result: Any) -> None:
-        fts_query = " OR ".join(tokenize(term_text)) or term_text
+        fts_query = fts_match_query(term_text)
         try:
             source_rows = conn.execute(
                 """

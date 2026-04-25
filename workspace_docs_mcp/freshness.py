@@ -102,6 +102,10 @@ class IndexFreshnessService:
         return {
             "state": state,
             "safe_to_use": safe_to_use,
+            "indexed_root": str(self.config.root),
+            "runtime_cwd": str(Path.cwd().resolve()),
+            "git_top_level": self.git_path(["rev-parse", "--show-toplevel"]),
+            "git_common_dir": self.git_path(["rev-parse", "--git-common-dir"]),
             "reasons": reasons,
             "warnings": warnings,
             "current_git_commit": current_commit,
@@ -173,6 +177,18 @@ class IndexFreshnessService:
             return subprocess.run(["git", *args], cwd=self.config.root, text=True, capture_output=True, check=False).stdout
         except Exception:
             return ""
+
+    def git_path(self, args: list[str]) -> str | None:
+        value = self.run_git(args).strip()
+        if not value:
+            return None
+        path = Path(value)
+        if not path.is_absolute():
+            path = self.config.root / path
+        try:
+            return str(path.resolve())
+        except Exception:
+            return str(path)
 
     def background_state(self) -> dict[str, Any]:
         self.prune_stale_lock()
@@ -295,11 +311,13 @@ class IndexFreshnessService:
                 creationflags=creationflags,
                 close_fds=False,
             )
+            log.close()
             payload["pid"] = process.pid
             self.lock_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             self.last_start_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             return {"state": "started", "pid": process.pid, "log_path": str(self.log_path), "reason": index_state, "started_at": started, "elapsed_seconds": 0, "retry_after_seconds": int(self.config.data.get("auto_index", {}).get("retry_after_seconds", 15))}
         except Exception as exc:
+            log.close()
             try:
                 self.lock_path.unlink(missing_ok=True)
             except Exception:

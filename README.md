@@ -26,6 +26,7 @@ Given a query such as `where is the auth runbook?`, `definition of extractor`, o
 - Semantic search finds concepts, not just strings.
 - Hybrid ranking combines semantic, lexical, entity, route, exact, authority, and freshness signals.
 - Authority policy prevents historical/generated docs from beating canonical docs.
+- Generated/test-derived docs are suppressed for broad documentation queries unless the query explicitly asks for tests/code.
 - Citations make results inspectable.
 - Index health prevents silent stale retrieval.
 
@@ -36,6 +37,8 @@ The simple agent pattern is:
 3. Escalate to the owner if the semantic index is blocked.
 
 `search_exact` exists for explicit symbols/paths/config keys. It integrates with semantic retrieval but is not a high-confidence replacement when the semantic index is blocked.
+
+When an agent works from a feature worktree, SemRAGent should still point at the canonical workspace/root index unless the owner explicitly asks to rebuild or add an overlay. The locator's job is to find authoritative docs and sections quickly; agents should then open only the returned citations.
 
 See [Trust Contract](docs/TRUST_CONTRACT.md) for the instruction-safety model.
 See [Agent Install In 5 Minutes](docs/AGENT_INSTALL.md) for a compact setup prompt/runbook.

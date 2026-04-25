@@ -19,6 +19,7 @@ class CatalogSearchTests(unittest.TestCase):
         (docs / "server").mkdir(parents=True)
         (docs / "archive").mkdir(parents=True)
         (docs / "generated").mkdir(parents=True)
+        (docs / "tests" / "server" / "areas").mkdir(parents=True)
         (root / "server-repo" / "src" / "Controllers").mkdir(parents=True)
         (root / "server-repo" / "config").mkdir(parents=True)
         (root / "server-repo" / "frontend" / ".next" / "server").mkdir(parents=True)
@@ -35,6 +36,10 @@ class CatalogSearchTests(unittest.TestCase):
         )
         (docs / "archive" / "old.md").write_text("# Old Activation\n\nLicense activation old note.\n", encoding="utf-8")
         (docs / "generated" / "activation.md").write_text("# Generated Activation\n\nLicense activation generated note.\n", encoding="utf-8")
+        (docs / "tests" / "server" / "areas" / "Auth_SystemControllerTests.cs.md").write_text(
+            "# Auth SystemControllerTests\n\nGenerated test documentation for SystemController health monitoring observability.\n",
+            encoding="utf-8",
+        )
         (root / "server-repo" / "src" / "Controllers" / "SystemController.cs").write_text(
             "namespace Demo.Controllers;\npublic sealed class SystemController\n{\n    public string Health() => \"ok\";\n}\n",
             encoding="utf-8",
@@ -139,6 +144,51 @@ class CatalogSearchTests(unittest.TestCase):
             self.assertEqual(result["results"][0]["path"], "docs/server/observability.md")
             self.assertIn("code symbol/config bridge", result["results"][0]["why"])
 
+    def test_locate_topic_handles_colon_terms_without_fts_column_error(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            self.build_basic_catalog(root)
+            with patch.object(VectorIndex, "search_chunks", return_value=[]):
+                result = Retriever(load_config(root)).search("health/readiness after: deployment", repo_area="server", max_results=3, rerank=False)
+
+            self.assertNotIn("no such column", " ".join(result["warnings"]))
+            self.assertIn(result["confidence"], {"low", "medium", "high"})
+
+    def test_broad_queries_suppress_generated_test_docs(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            self.build_basic_catalog(root)
+            generated_hit = {
+                "payload": {
+                    "chunk_id": "docs/tests/server/areas/Auth_SystemControllerTests.cs.md#auth-systemcontrollertests:1-3",
+                    "status": "inferred",
+                    "repo_area": "server",
+                    "doc_type": "doc",
+                },
+                "dense_score": 0.95,
+                "sparse_score": 0.95,
+                "generator_ranks": {"dense": 1, "sparse": 1},
+            }
+            canonical_hit = {
+                "payload": {
+                    "chunk_id": "docs/server/observability.md#server-observability:1-3",
+                    "status": "canonical",
+                    "repo_area": "server",
+                    "doc_type": "architecture",
+                },
+                "dense_score": 0.75,
+                "sparse_score": 0.70,
+                "generator_ranks": {"dense": 2, "sparse": 2},
+            }
+            with patch.object(VectorIndex, "search_chunks", return_value=[generated_hit, canonical_hit]):
+                result = Retriever(load_config(root)).search("SystemController health monitoring observability server component", repo_area="server", max_results=3, rerank=False, verbosity="full")
+
+            self.assertTrue(result["results"])
+            self.assertEqual(result["results"][0]["path"], "docs/server/observability.md")
+            test_hits = [item for item in result["results"] if item["path"].startswith("docs/tests/")]
+            self.assertTrue(test_hits)
+            self.assertIn("generated_or_test_doc_penalty", test_hits[0]["why"] + test_hits[0].get("policy_adjustments", []))
+
     def test_rebuild_commits_catalog_before_vector_rebuild(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
@@ -175,6 +225,7 @@ class CatalogSearchTests(unittest.TestCase):
             self.assertTrue(status["catalog_available_for_exact"])
             self.assertTrue(status["exact_available"])
             self.assertIn("semantic_index_not_completed", status["reasons"])
+            self.assertEqual(status["indexed_root"], str(root.resolve()))
 
     def test_open_blocks_path_traversal(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -292,6 +343,7 @@ class CatalogSearchTests(unittest.TestCase):
             self.assertFalse(result["owner_action"]["safe_for_agent"])
             self.assertEqual(result["index_status"]["background_index"]["retry_after_seconds"], 15)
             self.assertEqual(result["index_status"]["background_index"]["log_path"], "x.log")
+            self.assertIn("indexed_root", result["index_status"])
 
     def test_usable_stale_caps_confidence_at_medium(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
