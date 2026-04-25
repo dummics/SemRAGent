@@ -53,7 +53,28 @@ Agents often waste tokens and time reading random files or running broad text se
   - `BAAI/bge-reranker-v2-m3`
 - Optional but recommended: NVIDIA GPU with CUDA PyTorch for practical performance.
 
-## Install
+## 5-Minute Windows Install
+
+Recommended for Codex/Claude users on Windows:
+
+```powershell
+git clone https://github.com/dummics/workspace-docs-mcp.git "$env:USERPROFILE\.workspace-docs-mcp"
+& "$env:USERPROFILE\.workspace-docs-mcp\scripts\install.ps1" -WithCuda -StartQdrant
+& "$env:USERPROFILE\.workspace-docs-mcp\scripts\setup-workspace.ps1" -Workspace "C:\path\to\your\repo" -Preset generic -BuildIndex
+```
+
+Use `-CpuOnly` instead of `-WithCuda` if the machine has no NVIDIA/CUDA setup. CPU mode works, but first indexing and reranking can be slow on large workspaces.
+
+The installer creates stable wrappers:
+
+```text
+%USERPROFILE%\.workspace-docs-mcp\bin\workspace-docs.cmd
+%USERPROFILE%\.workspace-docs-mcp\bin\workspace-docs-mcp.cmd
+```
+
+Use those wrapper paths in MCP config so agents do not need an activated shell or a manual virtualenv.
+
+## Manual Install
 
 From source:
 
@@ -86,6 +107,17 @@ workspace-docs models doctor
 workspace-docs index build
 workspace-docs search "where is the architecture overview?"
 workspace-docs mcp
+```
+
+For an agent-managed setup, give the agent this compact instruction:
+
+```text
+Install workspace-docs-mcp from https://github.com/dummics/workspace-docs-mcp.
+Ask me only if you cannot infer:
+- target workspace path;
+- CUDA/NVIDIA vs CPU-only;
+- whether Docker/Qdrant may be started locally.
+Use the Windows installer when on Windows. Configure the MCP server named workspaceDocs. Build the initial index. Do not add write tools or shell fallback. After setup, test only through MCP tools: index_status, find_docs, locate_topic, search_exact, open_doc.
 ```
 
 Without installing, from a source checkout:
@@ -152,6 +184,14 @@ Add this short policy to the target agent instructions:
 - If `index_status.exact_available=true`, exact lookup is allowed only for those explicit terms; otherwise retry `find_docs` / `locate_topic` after `retry_after_seconds`.
 - If the index is `usable_stale`, the MCP should still answer from the previous index, cap confidence at medium, and refresh in the background after the current search.
 
+This is the intended usage pattern for agents:
+
+1. Start with `index_status` only when checking readiness or debugging.
+2. For docs, use `find_docs` or `locate_topic`.
+3. Open only returned citations with `open_doc`.
+4. For literal terms such as `PaymentWebhookHandler`, `SITE_GATE_PASSWORD`, `runner_flavor`, or a file path, use `search_exact`.
+5. If blocked, follow `owner_action` instead of running `rg` or reading random files.
+
 ## Project Config
 
 `workspace-docs init` creates:
@@ -177,9 +217,18 @@ Code-aware indexing is intentionally lightweight:
 
 - all configured text source files are inventoried in SQLite;
 - file lines are indexed for exact/FTS lookup with secret-like values redacted;
-- class/function/controller symbols and config/env keys are extracted;
+- class/function/controller symbols and config/env keys are extracted from common source files;
 - full source files are not embedded into Qdrant by default;
 - docs, glossaries, and runbooks remain the primary semantic retrieval target.
+
+Current code-aware exact extraction covers common patterns in:
+
+- C# / .NET (`.cs`);
+- TypeScript and JavaScript (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`);
+- Python (`.py`);
+- JSON/YAML/TOML/env/config-like files for config keys.
+
+`search_exact` does not call an embedding model and does not shell out to `rg`. It queries the local SQLite catalog, FTS table, code symbol table, config key table, and catalog paths/titles. This keeps exact lookup deterministic and available even while the semantic Qdrant index is refreshing.
 
 ## Troubleshooting
 

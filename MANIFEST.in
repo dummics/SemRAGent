@@ -5,6 +5,7 @@ include SECURITY.md
 recursive-include integrations *
 recursive-include scripts *
 recursive-include catalog *
+recursive-include docs *
 recursive-include examples *
 recursive-include tests *
 prune tests/__pycache__

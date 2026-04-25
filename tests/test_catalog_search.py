@@ -93,11 +93,30 @@ class CatalogSearchTests(unittest.TestCase):
             secret = retriever.exact("SITE_GATE_PASSWORD", repo_area="server")
 
             self.assertEqual(symbol["confidence"], "high")
+            self.assertEqual(symbol["results"][0]["source_kind"], "code_symbol")
+            self.assertTrue(symbol["results"][0]["path"].endswith("SystemController.cs"))
             self.assertTrue(any(item["source_kind"] == "code_symbol" and item["path"].endswith("SystemController.cs") for item in symbol["results"]))
             self.assertEqual(secret["confidence"], "high")
+            self.assertEqual(secret["results"][0]["source_kind"], "config_key")
             self.assertTrue(any(item["source_kind"] == "config_key" and item["path"].endswith(".env.example") for item in secret["results"]))
             self.assertTrue(all("change-me" not in item["snippet"] for item in secret["results"]))
             self.assertTrue(all(".next" not in item["path"] for item in secret["results"]))
+
+    def test_overview_query_promotes_overview_doc(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            self.build_basic_catalog(root)
+            (root / "docs" / "README.md").write_text("# Workspace Overview\n\nGeneral architecture overview for server and client components.\n", encoding="utf-8")
+            (root / "docs" / "reference").mkdir(parents=True)
+            (root / "docs" / "reference" / "package-format.md").write_text("# Package Format\n\nSpecific package reference architecture details.\n", encoding="utf-8")
+            with patch("workspace_docs_mcp.catalog.VectorIndex.rebuild_from_sqlite", return_value={"enabled": False, "reason": "unit-test"}):
+                Catalog(load_config(root)).rebuild()
+            with patch.object(VectorIndex, "search_documents", return_value=[]):
+                result = Retriever(load_config(root)).search("architettura generale overview componenti server client", max_results=3, rerank=False, mode="documents")
+
+            self.assertTrue(result["results"])
+            self.assertEqual(result["results"][0]["path"], "docs/README.md")
+            self.assertIn("overview intent", result["results"][0]["why"])
 
     def test_source_inventory_counts_files_symbols_and_config_keys(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:

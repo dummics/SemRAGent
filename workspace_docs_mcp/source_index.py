@@ -235,7 +235,9 @@ CS_TYPE_RE = re.compile(r"\b(class|record|interface|enum|struct)\s+([A-Z][A-Za-z
 CS_METHOD_RE = re.compile(
     r"\b(?:public|private|protected|internal)\s+(?:static\s+)?(?:async\s+)?(?:[A-Za-z0-9_<>,\[\]?]+\s+)+([A-Z_a-z][A-Za-z0-9_]*)\s*\("
 )
-TS_SYMBOL_RE = re.compile(r"\b(?:export\s+)?(?:class|interface|type|function|const|let|var)\s+([A-Z_a-z][A-Za-z0-9_]*)")
+TS_DECL_RE = re.compile(r"\b(?:export\s+)?(?:default\s+)?(class|interface|type|function|const|let|var)\s+([A-Z_a-z][A-Za-z0-9_]*)")
+TS_ARROW_RE = re.compile(r"\b(?:export\s+)?(?:const|let|var)\s+([A-Z][A-Za-z0-9_]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z0-9_]+)\s*=>")
+TS_ROUTE_RE = re.compile(r"\bexport\s+(?:async\s+)?function\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s*\(")
 PY_SYMBOL_RE = re.compile(r"^\s*(?:class|def)\s+([A-Z_a-z][A-Za-z0-9_]*)\s*[\(:]")
 UPPER_KEY_RE = re.compile(r"(?<![A-Za-z0-9_])([A-Z][A-Z0-9_]{2,})(?![A-Za-z0-9_])")
 SNAKE_KEY_RE = re.compile(r"(?<![A-Za-z0-9_])([a-z][a-z0-9]+(?:_[a-z0-9]+)+)(?![A-Za-z0-9_])")
@@ -257,8 +259,13 @@ def extract_code_symbols(source: SourceFile, lines: list[str]) -> list[CodeSymbo
                 if name not in {"if", "for", "foreach", "while", "switch", "catch", "using"}:
                     matches.append((name, "method"))
         elif suffix in {".ts", ".tsx", ".js", ".jsx", ".mjs"}:
-            for match in TS_SYMBOL_RE.finditer(line):
-                matches.append((match.group(1), "symbol"))
+            for match in TS_DECL_RE.finditer(line):
+                kind, name = match.group(1), match.group(2)
+                matches.append((name, "component" if name[:1].isupper() and kind in {"const", "function"} else kind))
+            for match in TS_ARROW_RE.finditer(line):
+                matches.append((match.group(1), "component"))
+            for match in TS_ROUTE_RE.finditer(line):
+                matches.append((match.group(1), "route_handler"))
         elif suffix in {".py"}:
             for match in PY_SYMBOL_RE.finditer(line):
                 matches.append((match.group(1), "symbol"))
@@ -275,8 +282,8 @@ def extract_code_symbols(source: SourceFile, lines: list[str]) -> list[CodeSymbo
                     source_repo=source.source_repo,
                     source_kind=source.source_kind,
                     container=current_container,
-                    signature=line.strip()[:300],
-                    context=line.strip()[:500],
+                    signature=redact_line(line).strip()[:300],
+                    context=redact_line(line).strip()[:500],
                 )
             )
     return symbols
