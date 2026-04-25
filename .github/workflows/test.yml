@@ -31,7 +31,7 @@ jobs:
           /tmp/semragent-smoke/bin/workspace-docs --help
       - name: Upload dist artifact
         if: matrix.python-version == '3.12'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: semragent-dist
           path: dist/*
