@@ -8,7 +8,7 @@ from unittest.mock import patch
 from workspace_docs_mcp.catalog import Catalog
 from workspace_docs_mcp.config import load_config
 from workspace_docs_mcp.freshness import IndexFreshnessService
-from workspace_docs_mcp.mcp_server import call_tool
+from workspace_docs_mcp.mcp_server import call_tool, tool_schema
 from workspace_docs_mcp.search import Retriever
 from workspace_docs_mcp.vector import VectorIndex
 
@@ -269,6 +269,9 @@ class CatalogSearchTests(unittest.TestCase):
             self.assertEqual(result["search_mode"], "blocked")
             self.assertEqual(result["confidence"], "low")
             self.assertEqual(result["results"], [])
+            self.assertIn("catalog_missing_or_empty", result["blocked_by"])
+            self.assertFalse(result["owner_action"]["safe_for_agent"])
+            self.assertIn("semragent index build", result["owner_action"]["commands"])
             self.assertIn("owner_action", result)
 
     def test_blocked_index_running_reports_retry_and_log(self) -> None:
@@ -286,6 +289,7 @@ class CatalogSearchTests(unittest.TestCase):
                 result = call_tool(load_config(root), "find_docs", {"query": "server activation"})
 
             self.assertIn("retry_after_seconds", result["owner_action"])
+            self.assertFalse(result["owner_action"]["safe_for_agent"])
             self.assertEqual(result["index_status"]["background_index"]["retry_after_seconds"], 15)
             self.assertEqual(result["index_status"]["background_index"]["log_path"], "x.log")
 
@@ -298,7 +302,37 @@ class CatalogSearchTests(unittest.TestCase):
                 result = call_tool(load_config(root), "find_docs", {"query": "Canonical Activation", "rerank": False})
 
             self.assertLessEqual({"low": 0, "medium": 1, "high": 2}[result["confidence"]], 1)
+            self.assertEqual(result["search_mode"], "degraded")
             self.assertIn("index_usable_stale: confidence capped at medium", result["warnings"])
+
+    def test_prepare_context_schema_and_results(self) -> None:
+        tool_names = [tool["name"] for tool in tool_schema()]
+        self.assertNotIn("qdrant_start", tool_names)
+        self.assertNotIn("qdrant_stop", tool_names)
+        schema = next(tool for tool in tool_schema() if tool["name"] == "prepare_context")
+        self.assertFalse(schema["inputSchema"]["additionalProperties"])
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            self.build_basic_catalog(root)
+            fresh = {"state": "fresh", "safe_to_use": True, "warnings": [], "reasons": [], "background_index": {"state": "idle"}, "exact_available": True}
+            with patch("workspace_docs_mcp.mcp_server.IndexFreshnessService.status", return_value=fresh), patch.object(VectorIndex, "search_documents", return_value=[]), patch.object(VectorIndex, "search_chunks", return_value=[]), patch.object(Retriever, "try_rerank", return_value=None):
+                result = call_tool(load_config(root), "prepare_context", {"task": "Update SystemController health monitoring docs", "repo_area": "server", "max_docs": 3, "max_sections": 3, "max_symbols": 5})
+
+            self.assertIn("read_first", result)
+            self.assertIn("related_symbols", result)
+            self.assertTrue(any(item["symbol"] == "SystemController" for item in result["related_symbols"]))
+
+    def test_prepare_context_blocked_mode(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            self.build_basic_catalog(root)
+            blocked = {"state": "blocked", "safe_to_use": False, "warnings": ["index_missing"], "reasons": ["qdrant_unavailable"], "background_index": {"state": "skipped", "reason": "unit-test"}, "exact_available": True}
+            with patch("workspace_docs_mcp.mcp_server.IndexFreshnessService.status", return_value=blocked):
+                result = call_tool(load_config(root), "prepare_context", {"task": "Update activation docs"})
+
+            self.assertEqual(result["search_mode"], "blocked")
+            self.assertEqual(result["read_first"], [])
+            self.assertFalse(result["owner_action"]["safe_for_agent"])
 
 
 if __name__ == "__main__":

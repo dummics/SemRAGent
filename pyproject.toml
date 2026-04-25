@@ -53,6 +53,7 @@ all = [
 ]
 
 [project.scripts]
+semragent = "workspace_docs_mcp.cli:main"
 workspace-docs = "workspace_docs_mcp.cli:main"
 workspace-docs-mcp = "workspace_docs_mcp.cli:mcp_main"
 

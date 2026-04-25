@@ -66,6 +66,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "max_chunk_tokens": 900,
         "min_chunk_tokens": 80,
     },
+    "qdrant": {
+        "url": "http://localhost:6333",
+        "docker_container": "semragent-qdrant",
+        "docker_image": "qdrant/qdrant",
+        "storage_path": ".rag/qdrant",
+    },
     "models": {
         "embedding_backend": "flagembedding_bgem3",
         "embedding_model": "BAAI/bge-m3",
@@ -80,6 +86,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "passage_max_length": 2048,
         "max_model_length": 8192,
         "local_only": True,
+        "offline_runtime": False,
         "device": "auto",
     },
     "retrieval": {
@@ -214,5 +221,7 @@ def load_yaml_like(path: Path) -> dict[str, Any]:
 def load_config(root: Path, config_path: Path | None = None) -> LocatorConfig:
     path = config_path or root / ".workspace-docs" / "locator.config.yml"
     data = deep_merge(DEFAULT_CONFIG, load_yaml_like(path))
+    if data.get("qdrant", {}).get("url"):
+        data["index"]["qdrant_url"] = data["qdrant"]["url"]
     return LocatorConfig(root=root.resolve(), data=data)
 

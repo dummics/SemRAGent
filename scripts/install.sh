@@ -35,6 +35,10 @@ else
 fi
 
 mkdir -p "$INSTALL_DIR/bin"
+cat > "$INSTALL_DIR/bin/semragent" <<EOF
+#!/usr/bin/env sh
+exec "$PY" -m workspace_docs_mcp.cli "\$@"
+EOF
 cat > "$INSTALL_DIR/bin/workspace-docs" <<EOF
 #!/usr/bin/env sh
 exec "$PY" -m workspace_docs_mcp.cli "\$@"
@@ -43,8 +47,9 @@ cat > "$INSTALL_DIR/bin/workspace-docs-mcp" <<EOF
 #!/usr/bin/env sh
 exec "$PY" -c "from workspace_docs_mcp.cli import mcp_main; raise SystemExit(mcp_main())" "\$@"
 EOF
-chmod +x "$INSTALL_DIR/bin/workspace-docs" "$INSTALL_DIR/bin/workspace-docs-mcp"
+chmod +x "$INSTALL_DIR/bin/semragent" "$INSTALL_DIR/bin/workspace-docs" "$INSTALL_DIR/bin/workspace-docs-mcp"
 
 echo "[OK] Installed workspace-docs-mcp in $INSTALL_DIR"
+echo "CLI: $INSTALL_DIR/bin/semragent"
 echo "CLI: $INSTALL_DIR/bin/workspace-docs"
 echo "MCP: $INSTALL_DIR/bin/workspace-docs-mcp"

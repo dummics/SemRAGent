@@ -17,10 +17,11 @@ function Warn($Message) { Write-Host "[WARN] $Message" -ForegroundColor Yellow }
 function Fail($Message) { Write-Host "[FAIL] $Message" -ForegroundColor Red; exit 1 }
 
 $WorkspacePath = (Resolve-Path -LiteralPath $Workspace).Path
+$Semragent = Join-Path $ToolDir "bin\semragent.cmd"
 $WorkspaceDocs = Join-Path $ToolDir "bin\workspace-docs.cmd"
 $WorkspaceDocsMcp = Join-Path $ToolDir "bin\workspace-docs-mcp.cmd"
-if (-not (Test-Path -LiteralPath $WorkspaceDocs)) {
-    Fail "workspace-docs wrapper not found at $WorkspaceDocs. Run scripts\install.ps1 first."
+if (-not (Test-Path -LiteralPath $Semragent)) {
+    Fail "semragent wrapper not found at $Semragent. Run scripts\install.ps1 first."
 }
 
 if ($StartQdrant) {
@@ -28,7 +29,7 @@ if ($StartQdrant) {
 }
 
 Step "Initializing workspace config"
-& $WorkspaceDocs --root $WorkspacePath init --preset $Preset
+& $Semragent --root $WorkspacePath init --preset $Preset
 Ok "Workspace config ready"
 
 Step "Ensuring .rag is ignored"
@@ -48,19 +49,19 @@ if (Test-Path -LiteralPath $GitIgnore) {
 
 if (-not $NoModelsDoctor) {
     Step "Checking local models and Qdrant"
-    & $WorkspaceDocs --root $WorkspacePath models doctor
+    & $Semragent --root $WorkspacePath models doctor
 }
 
 if ($BuildIndex) {
     Step "Building index"
-    & $WorkspaceDocs --root $WorkspacePath index build
+    & $Semragent --root $WorkspacePath index build
 }
 
 Step "MCP config"
 Write-Host "Codex:"
-Write-Host "[mcp_servers.workspaceDocs]"
-Write-Host "command = `"$WorkspaceDocsMcp`""
-Write-Host "args = [`"--root`", `"$WorkspacePath`"]"
+Write-Host "[mcp_servers.semragent]"
+Write-Host "command = `"$Semragent`""
+Write-Host "args = [`"--root`", `"$WorkspacePath`", `"mcp`"]"
 Write-Host "enabled = true"
 Write-Host "startup_timeout_sec = 120"
 Write-Host "tool_timeout_sec = 300"
@@ -68,9 +69,9 @@ Write-Host ""
 Write-Host "Claude Desktop:"
 Write-Host "{"
 Write-Host "  `"mcpServers`": {"
-Write-Host "    `"workspace-docs`": {"
-Write-Host "      `"command`": `"$WorkspaceDocsMcp`","
-Write-Host "      `"args`": [`"--root`", `"$WorkspacePath`"]"
+Write-Host "    `"semragent`": {"
+Write-Host "      `"command`": `"$Semragent`","
+Write-Host "      `"args`": [`"--root`", `"$WorkspacePath`", `"mcp`"]"
 Write-Host "    }"
 Write-Host "  }"
 Write-Host "}"

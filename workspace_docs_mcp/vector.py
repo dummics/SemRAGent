@@ -6,6 +6,7 @@ from typing import Any
 
 from .config import LocatorConfig
 from .local_bge_backend import BgeM3LocalBackend, lexical_weights_to_qdrant_sparse
+from .score import format_score
 
 
 class VectorIndex:
@@ -246,7 +247,7 @@ class VectorIndex:
         fused: list[dict[str, Any]] = []
         for key, item in hits.items():
             item["generator_ranks"] = ranks.get(key, {})
-            item["score"] = rrf_score(ranks.get(key, {}).values())
+            item["score"] = format_score(rrf_score(ranks.get(key, {}).values())) or 0.0
             fused.append(item)
         return sorted(fused, key=lambda item: item["score"], reverse=True)[:limit]
 

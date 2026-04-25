@@ -11,6 +11,7 @@ from .model import SearchResult
 from .source_index import redact_line, split_camel
 from .vector import VectorIndex
 from .local_bge_backend import BgeM3LocalBackend
+from .score import format_score
 
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9_./:-]+")
@@ -21,9 +22,7 @@ def tokenize(text: str) -> list[str]:
 
 
 def score(value: float | None) -> float | None:
-    if value is None:
-        return None
-    return round(max(0.0, min(1.0, float(value))), 3)
+    return format_score(value)
 
 
 def snippet(text: str, query: str, max_len: int = 180) -> str:

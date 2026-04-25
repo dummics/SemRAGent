@@ -1,8 +1,14 @@
-# Workspace Docs MCP
+# SemRAGent
 
-Local-first, read-only MCP server for helping coding agents find the right documentation faster than manual `rg`/grep spelunking.
+Local-first semantic RAG routing for coding agents.
 
-It is intentionally not a generative RAG chat app. It locates authoritative docs, sections, definitions, and citations inside a workspace.
+SemRAGent helps agents find authoritative workspace docs before they grep random files: path, heading, line range, authority, confidence, citations, and ranking explanation.
+
+Tagline: **Semantic RAG routing for coding agents.**
+
+SemRAGent is intentionally not a generative RAG chat app. It does not generate long answers from your repository. It is an agent-facing doc locator: given a query, topic, symbol, or path, it routes the agent to the right workspace docs and sections.
+
+Source of truth stays in Git, Markdown, and project manifests/config. SQLite, Qdrant, dense/sparse vectors, and eval reports are rebuildable local caches.
 
 Given a query such as `where is the auth runbook?`, `definition of extractor`, or `PaymentWebhookHandler`, the MCP returns:
 
@@ -14,15 +20,24 @@ Given a query such as `where is the auth runbook?`, `definition of extractor`, o
 - compact ranking signals;
 - warning/owner action when the index needs attention.
 
-## Why
+## Why SemRAGent?
 
-Agents often waste tokens and time reading random files or running broad text search. This tool gives them a simple pattern:
+- Agents waste context when they grep manually.
+- Semantic search finds concepts, not just strings.
+- Hybrid ranking combines semantic, lexical, entity, route, exact, authority, and freshness signals.
+- Authority policy prevents historical/generated docs from beating canonical docs.
+- Citations make results inspectable.
+- Index health prevents silent stale retrieval.
+
+The simple agent pattern is:
 
 1. Ask `find_docs` or `locate_topic`.
 2. Open only the returned citation with `open_doc`.
 3. Escalate to the owner if the semantic index is blocked.
 
-`search_exact` exists for explicit symbols/paths/config keys. It is not a semantic fallback, but it can stay available during a background semantic rebuild once the SQLite catalog has been committed.
+`search_exact` exists for explicit symbols/paths/config keys. It integrates with semantic retrieval but is not a high-confidence replacement when the semantic index is blocked.
+
+See [Trust Contract](docs/TRUST_CONTRACT.md) for the instruction-safety model.
 
 ## Features
 
@@ -66,9 +81,10 @@ git clone https://github.com/dummics/workspace-docs-mcp.git "$env:USERPROFILE\.w
 
 Use `-CpuOnly` instead of `-WithCuda` if the machine has no NVIDIA/CUDA setup. CPU mode works, but first indexing and reranking can be slow on large workspaces.
 
-The installer creates stable wrappers:
+The installer creates stable wrappers, including the new SemRAGent CLI and legacy aliases:
 
 ```text
+%USERPROFILE%\.workspace-docs-mcp\bin\semragent.cmd
 %USERPROFILE%\.workspace-docs-mcp\bin\workspace-docs.cmd
 %USERPROFILE%\.workspace-docs-mcp\bin\workspace-docs-mcp.cmd
 ```
@@ -82,7 +98,7 @@ From source:
 ```powershell
 git clone https://github.com/dummics/workspace-docs-mcp.git
 cd workspace-docs-mcp
-python -m pip install -e ".[all]"
+python -m pip install -e ".[vector,models,yaml,mcp]"
 ```
 
 CUDA PyTorch on Windows, before model checks:
@@ -102,23 +118,32 @@ python -m pip install -e ".[dev]"
 Inside the workspace you want agents to search:
 
 ```powershell
-workspace-docs init --preset generic
-docker run -p 6333:6333 -v ${PWD}/.rag/qdrant:/qdrant/storage qdrant/qdrant
-workspace-docs models doctor
-workspace-docs index build
-workspace-docs search "where is the architecture overview?"
-workspace-docs mcp
+semragent init --preset generic
+semragent qdrant start
+semragent models fetch
+semragent models doctor
+semragent index build
+semragent doctor
+semragent search "where is the architecture overview?"
+semragent mcp
 ```
+
+Compatibility note: the public product name is SemRAGent, but the Python package and repository are still `workspace-docs-mcp` for this MVP. Legacy commands remain available while the project migrates:
+
+- `semragent` is the preferred CLI.
+- `workspace-docs` remains a legacy CLI alias.
+- `workspace-docs-mcp` remains a legacy MCP entrypoint.
+- TODO: consider a non-breaking package/repo rename after external testing.
 
 For an agent-managed setup, give the agent this compact instruction:
 
 ```text
-Install workspace-docs-mcp from https://github.com/dummics/workspace-docs-mcp.
+Install SemRAGent / workspace-docs-mcp from https://github.com/dummics/workspace-docs-mcp.
 Ask me only if you cannot infer:
 - target workspace path;
 - CUDA/NVIDIA vs CPU-only;
 - whether Docker/Qdrant may be started locally.
-Use the Windows installer when on Windows. Configure the MCP server named workspaceDocs. Build the initial index. Do not add write tools or shell fallback. After setup, test only through MCP tools: index_status, find_docs, locate_topic, search_exact, open_doc.
+Use the Windows installer when on Windows. Configure the MCP server named semragent. Build the initial index. Do not add write tools or shell fallback. After setup, test only through MCP tools: index_status, find_docs, locate_topic, prepare_context, search_exact, open_doc.
 ```
 
 Without installing, from a source checkout:
@@ -141,6 +166,7 @@ python -m workspace_docs_mcp.cli --root "C:\path\to\workspace" mcp
 - `list_canonical`: lists canonical/runbook docs by area/topic.
 - `doc_neighbors`: returns links and related docs for one path.
 - `explain_result`: explains ranking or no-results; `path` may be null.
+- `prepare_context`: task-first context router; returns docs/sections/symbols to read before coding.
 - `index_status`: read-only readiness report.
 
 ## MCP Config
@@ -150,9 +176,9 @@ python -m workspace_docs_mcp.cli --root "C:\path\to\workspace" mcp
 See [integrations/codex-config.example.toml](integrations/codex-config.example.toml).
 
 ```toml
-[mcp_servers.workspaceDocs]
-command = "workspace-docs-mcp"
-args = ["--root", "C:\\path\\to\\workspace"]
+[mcp_servers.semragent]
+command = "semragent"
+args = ["mcp"]
 enabled = true
 startup_timeout_sec = 120
 tool_timeout_sec = 300
@@ -165,9 +191,22 @@ See [integrations/claude-desktop-config.example.json](integrations/claude-deskto
 ```json
 {
   "mcpServers": {
+    "semragent": {
+      "command": "semragent",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Legacy `workspace-docs` / `workspace-docs-mcp` commands remain supported for existing setups.
+
+```json
+{
+  "mcpServers": {
     "workspace-docs": {
-      "command": "workspace-docs-mcp",
-      "args": ["--root", "C:\\path\\to\\workspace"]
+      "command": "workspace-docs",
+      "args": ["mcp"]
     }
   }
 }
@@ -195,7 +234,7 @@ This is the intended usage pattern for agents:
 
 ## Project Config
 
-`workspace-docs init` creates:
+`semragent init` creates:
 
 ```text
 .workspace-docs/
@@ -236,8 +275,10 @@ Current code-aware exact extraction covers common patterns in:
 Run:
 
 ```powershell
-workspace-docs models doctor
-workspace-docs index_status
+semragent doctor
+semragent qdrant status
+semragent models doctor
+semragent index-status
 ```
 
 Common blockers:
@@ -253,6 +294,36 @@ When MCP search is blocked, the response includes `owner_action`. Agents should 
 During first indexing, `find_docs` and `locate_topic` can remain blocked until Qdrant document and section collections are complete. After a usable index exists, stale indexes should stay queryable: the MCP answers from the previous index, caps confidence at medium, and updates Qdrant in place in the background. The SQLite catalog is committed first; if `index_status.exact_available=true`, `search_exact` may resolve explicit paths, symbols, route IDs, or config keys while semantic retrieval finishes.
 
 Background indexing is opportunistic, not a daemon. Workers are launched only when the MCP detects a blocked/stale index and auto-indexing is allowed. The worker receives the parent MCP process PID, exits if that parent disappears, and also stops after `auto_index.max_runtime_seconds` (default: `3600`). This prevents an agent session from leaving a long-running BGE/Qdrant process consuming GPU all day.
+
+## Local Model Commands
+
+SemRAGent is strict about local models:
+
+- embedding model: `BAAI/bge-m3`;
+- embedding backend: `FlagEmbedding.BGEM3FlagModel`;
+- reranker model: `BAAI/bge-reranker-v2-m3`;
+- reranker backend: `FlagEmbedding.FlagReranker`;
+- dense embedding dimension: `1024`;
+- no fallback model.
+
+```powershell
+semragent models fetch
+semragent models doctor
+semragent models bench
+```
+
+Set `models.offline_runtime: true` only after the models are cached locally. In that mode SemRAGent sets `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` at runtime.
+
+## Eval And Authority Lint
+
+```powershell
+semragent eval bootstrap
+semragent eval run
+semragent eval report
+semragent lint-authority
+```
+
+`eval bootstrap` creates candidate cases only. Review them into `.workspace-docs/eval-golden.json` before treating failures as product regressions.
 
 ## Security Model
 

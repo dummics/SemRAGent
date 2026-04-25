@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from typing import Any
 
 
@@ -26,6 +27,8 @@ class BgeLocalConfig:
     query_max_length: int = 512
     passage_max_length: int = 2048
     max_model_length: int = 8192
+    local_only: bool = True
+    offline_runtime: bool = False
 
     @classmethod
     def from_locator_config(cls, config: Any) -> "BgeLocalConfig":
@@ -43,6 +46,8 @@ class BgeLocalConfig:
             query_max_length=int(models.get("query_max_length", cls.query_max_length)),
             passage_max_length=int(models.get("passage_max_length", cls.passage_max_length)),
             max_model_length=int(models.get("max_model_length", cls.max_model_length)),
+            local_only=bool(models.get("local_only", cls.local_only)),
+            offline_runtime=bool(models.get("offline_runtime", cls.offline_runtime)),
         )
 
 
@@ -85,6 +90,9 @@ class BgeM3LocalBackend:
     def __init__(self, config: BgeLocalConfig):
         self.config = config
         self._validate_config()
+        if config.offline_runtime:
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
         self.use_fp16 = _as_bool_fp16(config.use_fp16)
         self.embedding_model = None
         self.reranker = None

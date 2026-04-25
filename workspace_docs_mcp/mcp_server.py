@@ -19,6 +19,7 @@ def tool_schema() -> list[dict[str, Any]]:
         {"name": "list_canonical", "description": "List canonical/runbook docs by area/topic.", "inputSchema": {"type": "object", "additionalProperties": False, "properties": {"repo_area": {"type": ["string", "null"]}, "topic": {"type": ["string", "null"]}}}},
         {"name": "doc_neighbors", "description": "Show links and nearby canonical docs for a document.", "inputSchema": {"type": "object", "additionalProperties": False, "properties": {"path": {"type": "string"}, "include_historical": {"type": "boolean", "default": False}}, "required": ["path"]}},
         {"name": "explain_result", "description": "Explain why a path was or was not selected for a query; path may be null for no-results diagnostics.", "inputSchema": {"type": "object", "additionalProperties": False, "properties": {"query": {"type": "string"}, "path": {"type": ["string", "null"]}}, "required": ["query"]}},
+        {"name": "prepare_context", "description": "Read-only context router for coding tasks. Returns docs/sections/symbols to inspect; does not generate an answer.", "inputSchema": {"type": "object", "additionalProperties": False, "properties": {"task": {"type": "string"}, "repo_area": {"type": ["string", "null"]}, "max_docs": {"type": "integer", "default": 5, "minimum": 1, "maximum": 10}, "max_sections": {"type": "integer", "default": 8, "minimum": 1, "maximum": 20}, "max_symbols": {"type": "integer", "default": 10, "minimum": 0, "maximum": 30}, "include_historical": {"type": "boolean", "default": False}}, "required": ["task"]}},
         {"name": "index_status", "description": "Read-only readiness report for the local locator index, Qdrant, exact local models, and fallback-disabled policy.", "inputSchema": {"type": "object", "additionalProperties": False, "properties": {}}},
     ]
 
@@ -55,6 +56,8 @@ def call_tool(config_or_context: LocatorConfig | RuntimeContext, name: str, args
         return retriever.neighbors(args["path"], bool(args.get("include_historical", False)))
     if name == "explain_result":
         return retriever.explain(args["query"], args.get("path"))
+    if name == "prepare_context":
+        return prepare_context(config, retriever, args)
     if name == "index_status":
         from .catalog import Catalog
         from .vector import VectorIndex
@@ -62,7 +65,8 @@ def call_tool(config_or_context: LocatorConfig | RuntimeContext, name: str, args
         qdrant_ok, qdrant_warning = VectorIndex(config).available()
         index_status = IndexFreshnessService(config).status(allow_auto_start=False)
         return {
-            "server": "workspace-docs-mcp",
+            "server": "semragent",
+            "legacy_server": "workspace-docs-mcp",
             "mode": "read-only",
             "agent_pattern": "Use find_docs or locate_topic first, then open_doc only for returned citations.",
             "sqlite": str(config.sqlite_path),
@@ -95,7 +99,8 @@ def preflight_search(config: LocatorConfig, query: str) -> dict[str, Any] | None
         "search_mode": "blocked",
         "confidence": "low",
         "confidence_reasons": ["semantic index is blocked"],
-        "warnings": index_status.get("warnings", []),
+        "blocked_by": index_status.get("reasons", []),
+        "warnings": ["Semantic index is not available.", "Do not fallback to manual grep unless the owner explicitly allows it.", *index_status.get("warnings", [])],
         "results": [],
         "suggested_next_queries": [],
         "owner_action": owner_action(index_status),
@@ -109,22 +114,29 @@ def maybe_start_after_search(config: LocatorConfig, index_status: dict[str, Any]
     return IndexFreshnessService(config).status(allow_auto_start=True)
 
 
-def owner_action(index_status: dict[str, Any]) -> str:
+def owner_action(index_status: dict[str, Any]) -> dict[str, Any]:
     background = index_status.get("background_index") or {}
     if background.get("state") in {"started", "running"}:
-        detail = []
-        if background.get("pid"):
-            detail.append(f"pid={background['pid']}")
-        if background.get("elapsed_seconds") is not None:
-            detail.append(f"elapsed={background['elapsed_seconds']}s")
-        if background.get("log_path"):
-            detail.append(f"log={background['log_path']}")
-        suffix = f" ({', '.join(detail)})" if detail else ""
-        exact_note = " Catalog/exact lookup is available for explicit paths or symbols only." if index_status.get("exact_available") else ""
-        return f"Background semantic indexing is running; retry the same find_docs/locate_topic query after retry_after_seconds.{suffix}{exact_note}"
+        return {
+            "summary": "Background semantic indexing is running; retry the same find_docs/locate_topic query after retry_after_seconds.",
+            "commands": [],
+            "safe_for_agent": False,
+            "retry_after_seconds": background.get("retry_after_seconds"),
+            "pid": background.get("pid"),
+            "elapsed_seconds": background.get("elapsed_seconds"),
+            "log_path": background.get("log_path"),
+            "exact_note": "Catalog/exact lookup is available for explicit paths or symbols only." if index_status.get("exact_available") else None,
+        }
+    commands: list[str] = []
+    summary = "Rebuild the SemRAGent index."
     if "qdrant_unavailable" in index_status.get("reasons", []):
-        return "Start Qdrant at the configured URL, then run workspace-docs index build."
-    return "Run workspace-docs index build or fix the reported model/index blocker. No fallback model is allowed."
+        commands.append("semragent qdrant start")
+        summary = "Start Qdrant, then rebuild the semantic index."
+    if any("model" in reason for reason in index_status.get("reasons", [])):
+        commands.append("semragent models fetch")
+        summary = "Fetch required local models, then rebuild the semantic index."
+    commands.append("semragent index build")
+    return {"summary": summary, "commands": list(dict.fromkeys(commands)), "safe_for_agent": False}
 
 
 def attach_index_status(config: LocatorConfig, result: dict[str, Any], index_status: dict[str, Any]) -> dict[str, Any]:
@@ -141,8 +153,52 @@ def attach_index_status(config: LocatorConfig, result: dict[str, Any], index_sta
     elif background.get("state") == "skipped" and background.get("reason") not in {"debounce"}:
         result["warnings"].append(f"background_index_skipped:{background.get('reason')}")
     if index_status.get("state") == "usable_stale":
+        result["search_mode"] = "degraded"
+        result["exact_available"] = bool(index_status.get("exact_available"))
+        result["hybrid_available"] = True
         result["warnings"].append("index_usable_stale: confidence capped at medium")
     return result
+
+
+def prepare_context(config: LocatorConfig, retriever: Retriever, args: dict[str, Any]) -> dict[str, Any]:
+    task = str(args["task"])
+    preflight = preflight_search(config, task)
+    if preflight:
+        return {"task": task, "search_mode": "blocked", "confidence": "low", "read_first": [], "related_sections": [], "related_symbols": [], "do_not_start_with": [], "warnings": preflight["warnings"], "owner_action": preflight["owner_action"], "index_status": preflight["index_status"]}
+    include_historical = bool(args.get("include_historical", False))
+    repo_area = args.get("repo_area")
+    docs = retriever.search(task, repo_area=repo_area, include_historical=include_historical, max_results=int(args.get("max_docs", 5)), rerank=True, mode="documents")
+    sections = retriever.search(task, repo_area=repo_area, include_historical=include_historical, max_results=int(args.get("max_sections", 8)), rerank=True, mode="sections", dedupe_documents=False)
+    symbols: list[dict[str, Any]] = []
+    max_symbols = int(args.get("max_symbols", 10))
+    if max_symbols:
+        candidates = [token.strip(".,:;()[]{}") for token in task.replace("/", " ").replace("\\", " ").split()]
+        candidates = [token for token in candidates if token and (any(ch.isupper() for ch in token) or "_" in token or "." in token)]
+        for token in candidates[:5]:
+            exact = retriever.exact(token, repo_area=repo_area, include_historical=include_historical, max_results=max_symbols)
+            for item in exact.get("results", []):
+                if len(symbols) >= max_symbols:
+                    break
+                symbols.append({"symbol": token, "path": item.get("path"), "line_number": item.get("line_number"), "source_kind": item.get("source_kind")})
+    read_first = [
+        {"path": item.get("path"), "title": item.get("title"), "status": item.get("status"), "citation": item.get("citation"), "why": item.get("why", [])[:4], "score": item.get("score")}
+        for item in docs.get("results", [])[: int(args.get("max_docs", 5))]
+    ]
+    related_sections = [
+        {"path": item.get("path"), "title": item.get("title"), "heading_path": item.get("heading_path"), "citation": item.get("citation"), "score": item.get("score")}
+        for item in sections.get("results", [])[: int(args.get("max_sections", 8))]
+    ]
+    return {
+        "task": task,
+        "confidence": docs.get("confidence", "low"),
+        "search_mode": docs.get("search_mode", "normal"),
+        "read_first": read_first,
+        "related_sections": related_sections,
+        "related_symbols": symbols,
+        "do_not_start_with": [],
+        "warnings": list(dict.fromkeys([*docs.get("warnings", []), *sections.get("warnings", [])])),
+        "owner_action": None,
+    }
 
 
 def compact_catalog_stats(stats: dict[str, Any]) -> dict[str, Any]:
@@ -205,7 +261,7 @@ def run_stdio(config: LocatorConfig) -> None:
             req_id = req.get("id")
             params = req.get("params") or {}
             if method == "initialize":
-                out = response(req_id, {"protocolVersion": "2024-11-05", "serverInfo": {"name": "workspace-docs-mcp", "version": "0.1.0"}, "capabilities": {"tools": {}}})
+                out = response(req_id, {"protocolVersion": "2024-11-05", "serverInfo": {"name": "semragent", "version": "0.1.0"}, "capabilities": {"tools": {}}})
             elif method == "notifications/initialized":
                 continue
             elif method == "tools/list":

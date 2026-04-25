@@ -1,9 +1,8 @@
 {
   "mcpServers": {
-    "workspace-docs": {
-      "command": "workspace-docs-mcp",
-      "args": ["--root", "C:\\path\\to\\workspace"]
+    "semragent": {
+      "command": "semragent",
+      "args": ["--root", "C:\\path\\to\\workspace", "mcp"]
     }
   }
 }
-

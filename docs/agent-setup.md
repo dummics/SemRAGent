@@ -3,13 +3,13 @@
 Use this when asking Codex, Claude, or another coding agent to install the tool for a workspace.
 
 ```text
-Install and configure workspace-docs-mcp for this local workspace.
+Install and configure SemRAGent / workspace-docs-mcp for this local workspace.
 
 Repository:
 https://github.com/dummics/workspace-docs-mcp
 
 Goal:
-Make the MCP server available as workspaceDocs and build the initial index. After setup, test through MCP tools only. Do not use rg/grep/manual file scanning as a replacement for the locator.
+Make the MCP server available as semragent and build the initial index. After setup, test through MCP tools only. Do not use rg/grep/manual file scanning as a replacement for the locator.
 
 Ask me only for these decisions if you cannot infer them:
 - target workspace path;
@@ -20,13 +20,14 @@ On Windows, prefer:
 1. Clone or update the repo into %USERPROFILE%\.workspace-docs-mcp.
 2. Run scripts\install.ps1 with -WithCuda if CUDA is available, otherwise -CpuOnly. Use -StartQdrant if Docker is allowed.
 3. Run scripts\setup-workspace.ps1 -Workspace "<target workspace>" -Preset generic -BuildIndex.
-4. Add the printed MCP config to Codex/Claude.
+4. Add the printed semragent MCP config to Codex/Claude.
 5. Restart the agent runtime so the MCP server is loaded.
 
 Validation:
 - Call index_status.
 - Call find_docs for an architecture/runbook query.
 - Call locate_topic for a definition/topic query.
+- Call prepare_context for one coding task.
 - Call search_exact for one explicit symbol/path/config key.
 - Call open_doc only on citations returned by the locator.
 

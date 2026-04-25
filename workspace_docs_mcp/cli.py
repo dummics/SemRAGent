@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 import sys
 from pathlib import Path
 
 from .catalog import Catalog
 from .config import DEFAULT_CONFIG, load_config
-from .local_bge_backend import ModelConfigurationError, ModelLoadError
+from .local_bge_backend import BgeM3LocalBackend, ModelConfigurationError, ModelLoadError
 from .search import Retriever
 
 
@@ -29,7 +30,7 @@ def emit(obj: object) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="workspace-docs", description="Workspace Docs local Doc Locator")
+    parser = argparse.ArgumentParser(prog=Path(sys.argv[0]).stem or "semragent", description="SemRAGent local semantic RAG routing for coding agents")
     parser.add_argument("--root", default=None, help="Workspace root")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -74,15 +75,32 @@ def build_parser() -> argparse.ArgumentParser:
     open_doc.add_argument("--line-end", type=int, default=None)
     open_doc.add_argument("--max-chars", type=int, default=12000)
 
-    sub.add_parser("doctor")
+    doctor_parser = sub.add_parser("doctor")
+    doctor_parser.add_argument("--no-models", action="store_true", help="Skip loading local BGE models")
+    doctor_parser.add_argument("--json", action="store_true", help="Emit JSON instead of compact checks")
     sub.add_parser("index-status")
     sub.add_parser("index_status")
     models = sub.add_parser("models")
     models_sub = models.add_subparsers(dest="models_command", required=True)
     models_sub.add_parser("doctor")
+    bench = models_sub.add_parser("bench")
+    bench.add_argument("--batch-size", type=int, default=8)
+    bench.add_argument("--passages", type=int, default=16)
+    models_sub.add_parser("fetch")
+    qdrant = sub.add_parser("qdrant")
+    qdrant_sub = qdrant.add_subparsers(dest="qdrant_command", required=True)
+    qdrant_sub.add_parser("status")
+    qdrant_sub.add_parser("start")
+    qdrant_sub.add_parser("stop")
     eval_parser = sub.add_parser("eval")
+    eval_sub = eval_parser.add_subparsers(dest="eval_command", required=False)
+    eval_sub.add_parser("bootstrap")
+    eval_sub.add_parser("run")
+    eval_sub.add_parser("report")
     eval_parser.add_argument("--suite", default="sample", choices=["sample", "canonical-topics"])
     eval_parser.add_argument("--no-rerank", action="store_true")
+    lint = sub.add_parser("lint-authority")
+    lint.add_argument("--json", action="store_true")
     sub.add_parser("mcp")
     return parser
 
@@ -168,6 +186,12 @@ index:
   max_chunk_tokens: 900
   min_chunk_tokens: 80
 
+qdrant:
+  url: http://localhost:6333
+  docker_container: semragent-qdrant
+  docker_image: qdrant/qdrant
+  storage_path: .rag/qdrant
+
 models:
   embedding_backend: flagembedding_bgem3
   embedding_model: BAAI/bge-m3
@@ -177,6 +201,8 @@ models:
   require_exact_model_names: true
   require_embedding_dimension: 1024
   require_reranker: true
+  local_only: true
+  offline_runtime: false
   use_fp16: auto
 
 auto_index:
@@ -202,10 +228,11 @@ auto_index:
         "created": created,
         "skipped": skipped,
         "next_steps": [
-            "Start Qdrant: docker run -p 6333:6333 -v ${PWD}/.rag/qdrant:/qdrant/storage qdrant/qdrant",
-            "Run: workspace-docs models doctor",
-            "Run: workspace-docs index build",
-            "Configure your agent MCP to run workspace-docs-mcp --root <workspace>",
+            "Run: semragent qdrant start",
+            "Run: semragent models fetch",
+            "Run: semragent models doctor",
+            "Run: semragent index build",
+            "Configure your agent MCP to run semragent mcp",
         ],
     }
 
@@ -243,6 +270,18 @@ def doctor(config) -> dict[str, object]:
         "canonical_without_aliases": canonical_missing_alias,
         "notes": ["Qdrant/model health is checked during index build/search; exact and SQLite search remain available without Qdrant."],
     }
+
+
+def print_checks(result: dict[str, object]) -> None:
+    for check in result.get("checks", []):
+        print(f"[{check['status']}] {check['message']}")
+    owner_action = result.get("owner_action")
+    if owner_action:
+        print("")
+        print("Owner action:")
+        commands = owner_action.get("commands", []) if isinstance(owner_action, dict) else []
+        for command in commands:
+            print(f"  {command}")
 
 
 def models_doctor(config) -> dict[str, object]:
@@ -319,6 +358,61 @@ def models_doctor(config) -> dict[str, object]:
         return {"ok": True, "checks": checks}
     except Exception as exc:
         return fail(f"Required local BGE model check failed. No fallback model is allowed. {exc}")
+
+
+def models_fetch(config) -> dict[str, object]:
+    try:
+        backend = BgeM3LocalBackend.from_locator_config(config)
+        backend.load_embedding_model()
+        backend.load_reranker()
+        return {
+            "ok": True,
+            "embedding_model": config.embedding_model,
+            "reranker_model": config.reranker_model,
+            "message": "Required local models loaded/cached. No fallback model was used.",
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": str(exc),
+            "owner_action": {
+                "summary": "Ensure local model cache/network access is available, then rerun models fetch.",
+                "commands": ["semragent models fetch", "semragent models doctor"],
+                "safe_for_agent": False,
+            },
+        }
+
+
+def models_bench(config, batch_size: int = 8, passages: int = 16) -> dict[str, object]:
+    import torch  # type: ignore
+
+    backend = BgeM3LocalBackend.from_locator_config(config)
+    warmup = ["License activation validates a client request on the server."]
+    backend.encode_passages(warmup, return_sparse=True)
+    backend.rerank_pairs([("server license activation", warmup[0])])
+    texts = [f"License activation validates request number {idx} on the server." for idx in range(passages)]
+    start = time.perf_counter()
+    encoded = backend.encode_passages(texts, return_sparse=True)
+    encode_seconds = time.perf_counter() - start
+    pairs = [("server license activation", text) for text in texts]
+    start = time.perf_counter()
+    scores = backend.rerank_pairs(pairs)
+    rerank_seconds = time.perf_counter() - start
+    return {
+        "torch_version": torch.__version__,
+        "cuda_available": bool(torch.cuda.is_available()),
+        "cuda_device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+        "embedding_model": config.embedding_model,
+        "reranker_model": config.reranker_model,
+        "use_fp16": backend.use_fp16,
+        "batch_size": batch_size,
+        "max_length": backend.config.passage_max_length,
+        "warmup_seconds": 0,
+        "encode_seconds": round(encode_seconds, 3),
+        "docs_per_sec": round(passages / encode_seconds, 3) if encode_seconds else None,
+        "rerank_pairs_per_sec": round(len(scores) / rerank_seconds, 3) if rerank_seconds else None,
+        "embedding_shape": [len(encoded["dense"]), len(encoded["dense"][0]) if encoded["dense"] else 0],
+    }
 
 
 def eval_golden(config, suite: str = "sample", rerank: bool = True) -> dict[str, object]:
@@ -399,21 +493,76 @@ def main(argv: list[str] | None = None) -> int:
         emit(Retriever(config).open_doc(args.path, args.heading, args.line_start, args.line_end, args.max_chars))
         return 0
     if args.command == "doctor":
-        emit(doctor(config))
-        return 0
+        from .doctor import run_doctor
+
+        result = run_doctor(config, check_models=not args.no_models)
+        if args.json:
+            emit(result)
+        else:
+            print_checks(result)
+        return 0 if result["ok"] else 1
     if args.command in {"index-status", "index_status"}:
         from .freshness import IndexFreshnessService
 
         emit(IndexFreshnessService(config).status(allow_auto_start=False))
         return 0
     if args.command == "models":
-        result = models_doctor(config)
-        for check in result["checks"]:
-            print(f"[{check['status']}] {check['message']}")
-        return 0 if result["ok"] else 1
+        if args.models_command == "doctor":
+            result = models_doctor(config)
+            print_checks(result)
+            return 0 if result["ok"] else 1
+        if args.models_command == "fetch":
+            result = models_fetch(config)
+            emit(result)
+            return 0 if result["ok"] else 1
+        if args.models_command == "bench":
+            try:
+                emit(models_bench(config, args.batch_size, args.passages))
+                return 0
+            except Exception as exc:
+                emit({"ok": False, "error": str(exc), "message": "Required local BGE models could not be benchmarked. No fallback model is allowed."})
+                return 1
+    if args.command == "qdrant":
+        from .qdrant_cli import qdrant_start, qdrant_status, qdrant_stop
+
+        if args.qdrant_command == "status":
+            result = qdrant_status(config)
+        elif args.qdrant_command == "start":
+            result = qdrant_start(config)
+        else:
+            result = qdrant_stop(config)
+        emit(result)
+        return 0 if result.get("ok") else 1
     if args.command == "eval":
+        from .eval import bootstrap_eval, report_eval, run_eval
+
+        if args.eval_command == "bootstrap":
+            emit(bootstrap_eval(config))
+            return 0
+        if args.eval_command == "run":
+            result = run_eval(config, not args.no_rerank)
+            emit(result)
+            return 0 if result.get("ok") else 1
+        if args.eval_command == "report":
+            result = report_eval(config)
+            emit(result)
+            return 0 if result.get("ok") else 1
         emit(eval_golden(config, args.suite, not args.no_rerank))
         return 0
+    if args.command == "lint-authority":
+        from .authority_lint import lint_authority
+
+        result = lint_authority(config)
+        if args.json:
+            emit(result)
+        else:
+            for failure in result["failures"]:
+                print(f"[FAIL] {failure['code']}: {failure.get('path') or failure.get('topic')}")
+                print(f"[FIX] {failure.get('fix')}")
+            for warning in result["warnings"]:
+                print(f"[WARN] {warning['code']}: {warning.get('path') or warning.get('term') or warning.get('title') or warning.get('alias')}")
+                print(f"[FIX] {warning.get('fix')}")
+        return 0 if result["ok"] else 1
     if args.command == "mcp":
         from .mcp_server import run_stdio
 
