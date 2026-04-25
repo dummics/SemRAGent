@@ -21,3 +21,17 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Build package
         run: python -m build
+      - name: Smoke install wheel
+        if: matrix.python-version == '3.12'
+        run: |
+          python -m venv /tmp/semragent-smoke
+          /tmp/semragent-smoke/bin/python -m pip install --upgrade pip
+          /tmp/semragent-smoke/bin/python -m pip install dist/*.whl
+          /tmp/semragent-smoke/bin/semragent --help
+          /tmp/semragent-smoke/bin/workspace-docs --help
+      - name: Upload dist artifact
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: semragent-dist
+          path: dist/*

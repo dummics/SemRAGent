@@ -38,6 +38,7 @@ The simple agent pattern is:
 `search_exact` exists for explicit symbols/paths/config keys. It integrates with semantic retrieval but is not a high-confidence replacement when the semantic index is blocked.
 
 See [Trust Contract](docs/TRUST_CONTRACT.md) for the instruction-safety model.
+See [Agent Install In 5 Minutes](docs/AGENT_INSTALL.md) for a compact setup prompt/runbook.
 
 ## Features
 
@@ -344,6 +345,18 @@ python -m pip install -e ".[dev]"
 python -m unittest discover -s tests -v
 python -m build
 ```
+
+Clean install smoke:
+
+```powershell
+.\scripts\smoke-install.ps1
+```
+
+```sh
+sh scripts/smoke-install.sh
+```
+
+Release artifacts are produced by GitHub Actions and attached to tag pushes matching `v*`.
 
 Model/Qdrant smoke:
 
