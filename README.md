@@ -110,7 +110,7 @@ python -m workspace_docs_mcp.cli --root "C:\path\to\workspace" mcp
 
 ### Codex
 
-See [prompts/codex-config.example.toml](prompts/codex-config.example.toml).
+See [integrations/codex-config.example.toml](integrations/codex-config.example.toml).
 
 ```toml
 [mcp_servers.workspaceDocs]
@@ -123,7 +123,7 @@ tool_timeout_sec = 300
 
 ### Claude Desktop
 
-See [prompts/claude-desktop-config.example.json](prompts/claude-desktop-config.example.json).
+See [integrations/claude-desktop-config.example.json](integrations/claude-desktop-config.example.json).
 
 ```json
 {
@@ -138,9 +138,7 @@ See [prompts/claude-desktop-config.example.json](prompts/claude-desktop-config.e
 
 ## Agent Instructions
 
-Add [prompts/AGENTS.addendum.md](prompts/AGENTS.addendum.md) to the target workspace or paste it into your agent instructions.
-
-Short version:
+Add this short policy to the target agent instructions:
 
 - Use `find_docs` / `locate_topic` before reading files.
 - Use `open_doc` only for returned citations.
@@ -198,7 +196,7 @@ When MCP search is blocked, the response includes `owner_action`. Agents should 
 
 ## Examples
 
-The [examples/licensing-framework](examples/licensing-framework) folder is a real project adapter/fixture. It is not part of the core product boundary.
+The [examples/licensing-framework](examples/licensing-framework) folder is a real project adapter/fixture. It is intentionally small and kept separate from the core package.
 
 ## Development
 
