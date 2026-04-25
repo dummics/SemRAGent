@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -38,9 +37,19 @@ def snippet(text: str, query: str, max_len: int = 180) -> str:
 
 
 class Retriever:
-    def __init__(self, config: LocatorConfig):
-        self.config = config
-        self.catalog = Catalog(config)
+    def __init__(self, config_or_context: LocatorConfig | Any):
+        if hasattr(config_or_context, "config") and hasattr(config_or_context, "catalog"):
+            self.context = config_or_context
+            self.config = config_or_context.config
+            self.catalog = config_or_context.catalog
+            self.vector = config_or_context.vector
+            self.backend = config_or_context.backend
+        else:
+            self.context = None
+            self.config = config_or_context
+            self.catalog = Catalog(config_or_context)
+            self.vector = VectorIndex(config_or_context)
+            self.backend = None
 
     def allowed_status_clause(self, include_historical: bool) -> tuple[str, list[str]]:
         excluded = set(self.config.data["policy"]["exclude_by_default"])
@@ -49,35 +58,29 @@ class Retriever:
         placeholders = ",".join("?" for _ in excluded)
         return (f"status NOT IN ({placeholders})", list(excluded)) if excluded else ("1=1", [])
 
-    def search(self, query: str, repo_area: str | None = None, doc_type: str | None = None, include_historical: bool = False, max_results: int = 8, rerank: bool = True, dedupe_documents: bool = True, verbosity: str = "compact") -> dict[str, Any]:
+    def search(self, query: str, repo_area: str | None = None, doc_type: str | None = None, include_historical: bool = False, max_results: int = 8, rerank: bool = True, dedupe_documents: bool = True, verbosity: str = "compact", mode: str = "sections", confidence_cap: str | None = None) -> dict[str, Any]:
         self.catalog.init()
         candidates: dict[str, SearchResult] = {}
         warnings: list[str] = []
-        for result in self.lexical_search(query, repo_area, doc_type, include_historical, int(self.config.data["retrieval"]["candidate_limit_lexical"])):
-            candidates[result.path + str(result.line_start)] = result
-        for result in self.alias_and_exact_candidates(query, repo_area, include_historical):
-            key = result.path + str(result.line_start)
-            if key in candidates:
-                candidates[key].exact_score = max(candidates[key].exact_score, result.exact_score)
-                candidates[key].why.append("exact/alias match")
-            else:
-                candidates[key] = result
+        debug: dict[str, Any] = {"candidate_counts": {}, "excluded_counts": self.excluded_counts(include_historical), "active_filters": self.active_filters(repo_area, doc_type, include_historical)}
         try:
-            dense_results = self.dense_candidates(query, repo_area, doc_type, include_historical)
+            dense_results = self.dense_candidates(query, repo_area, doc_type, include_historical, mode=mode)
         except Exception as exc:
             message = str(exc)
             if "BAAI/bge" in message or "Required embedding model" in message or "No fallback model is allowed" in message:
                 raise
             warnings.append(f"vector_index_unavailable: {message}")
             dense_results = []
-        for result in dense_results:
-            key = result.path + str(result.line_start)
-            if key in candidates:
-                candidates[key].dense_score = max(candidates[key].dense_score, result.dense_score)
-                candidates[key].sparse_score = max(candidates[key].sparse_score, result.sparse_score)
-                candidates[key].why.append("semantic match")
-            else:
-                candidates[key] = result
+        debug["candidate_counts"]["vector"] = len(dense_results)
+        self.merge_candidates(candidates, dense_results, "vector")
+        generators = [
+            ("entity", self.entity_candidates(query, repo_area, include_historical)),
+            ("fts", self.lexical_search(query, repo_area, doc_type, include_historical, int(self.config.data["retrieval"]["candidate_limit_lexical"]), mode=mode)),
+            ("alias", self.alias_and_exact_candidates(query, repo_area, include_historical, mode=mode)),
+        ]
+        for generator, generated in generators:
+            debug["candidate_counts"][generator] = len(generated)
+            self.merge_candidates(candidates, generated, generator)
         results = list(candidates.values())
         self.apply_scores(results, query)
         if rerank:
@@ -93,17 +96,56 @@ class Retriever:
             results = list(best_by_path.values())
         results = results[:max_results]
         confidence, reasons, suggested = self.confidence(results, query)
+        if confidence_cap == "medium" and confidence == "high":
+            confidence = "medium"
+            reasons.append("confidence capped because index is usable_stale")
+        if mode == "documents":
+            self.attach_best_sections(results, query, include_historical)
         return {
             "query": query,
             "intent": "locate_doc",
+            "search_mode": mode,
             "confidence": confidence,
             "confidence_reasons": reasons,
             "warnings": warnings,
             "results": [self.result_json(r, verbosity=verbosity) for r in results],
             "suggested_next_queries": suggested,
+            **({"debug": {**debug, "index_state": self.index_state(), "recommended_fix": self.recommended_fix(results, debug)}} if verbosity == "full" else {}),
         }
 
-    def lexical_search(self, query: str, repo_area: str | None, doc_type: str | None, include_historical: bool, limit: int) -> list[SearchResult]:
+    def merge_candidates(self, candidates: dict[str, SearchResult], generated: list[SearchResult], generator: str) -> None:
+        for rank, result in enumerate(generated, start=1):
+            key = result.path + str(result.line_start) + result.source_type
+            result.generator_ranks[generator] = rank
+            if key in candidates:
+                current = candidates[key]
+                current.dense_score = max(current.dense_score, result.dense_score)
+                current.sparse_score = max(current.sparse_score, result.sparse_score)
+                current.lexical_score = max(current.lexical_score, result.lexical_score)
+                current.exact_score = max(current.exact_score, result.exact_score)
+                current.why.extend(result.why)
+                current.generator_ranks.update(result.generator_ranks)
+            else:
+                candidates[key] = result
+
+    def active_filters(self, repo_area: str | None, doc_type: str | None, include_historical: bool) -> dict[str, Any]:
+        excluded = list(self.config.data["policy"]["exclude_by_default"])
+        if not include_historical:
+            excluded.append("historical")
+        return {"repo_area": repo_area or "any", "doc_type": doc_type or "any", "include_historical": include_historical, "excluded_statuses": sorted(set(excluded))}
+
+    def excluded_counts(self, include_historical: bool) -> dict[str, int]:
+        excluded = set(self.config.data["policy"]["exclude_by_default"])
+        if not include_historical:
+            excluded.add("historical")
+        if not excluded:
+            return {}
+        placeholders = ",".join("?" for _ in excluded)
+        with self.catalog.connect() as conn:
+            rows = conn.execute(f"SELECT status, COUNT(*) count FROM documents WHERE status IN ({placeholders}) GROUP BY status", list(excluded)).fetchall()
+        return {str(row["status"]): int(row["count"]) for row in rows}
+
+    def lexical_search(self, query: str, repo_area: str | None, doc_type: str | None, include_historical: bool, limit: int, mode: str = "sections") -> list[SearchResult]:
         status_clause, params = self.allowed_status_clause(include_historical)
         filters = [status_clause]
         if repo_area and repo_area != "any":
@@ -114,7 +156,17 @@ class Retriever:
             params.append(doc_type)
         where = " AND ".join(filters)
         fts_query = " OR ".join(tokenize(query)) or query
-        sql = f"""
+        if mode == "documents":
+            sql = f"""
+            SELECT c.*, bm25(chunks_fts) AS rank
+            FROM chunks_fts
+            JOIN chunks c ON c.chunk_id = chunks_fts.chunk_id
+            WHERE chunks_fts MATCH ? AND {where}
+            GROUP BY c.path
+            ORDER BY rank LIMIT ?
+        """
+        else:
+            sql = f"""
             SELECT c.*, bm25(chunks_fts) AS rank
             FROM chunks_fts
             JOIN chunks c ON c.chunk_id = chunks_fts.chunk_id
@@ -132,8 +184,9 @@ class Retriever:
                 out.append(self.row_to_result(row, query, lexical_score=lexical, why=["lexical match"]))
         return out
 
-    def dense_candidates(self, query: str, repo_area: str | None, doc_type: str | None, include_historical: bool) -> list[SearchResult]:
-        hits = VectorIndex(self.config).search_chunks(query, int(self.config.data["retrieval"].get("rerank_candidates", 50)))
+    def dense_candidates(self, query: str, repo_area: str | None, doc_type: str | None, include_historical: bool, mode: str = "sections") -> list[SearchResult]:
+        limit = int(self.config.data["retrieval"].get("rerank_candidates", 50))
+        hits = self.vector.search_documents(query, limit) if mode == "documents" else self.vector.search_chunks(query, limit)
         if not hits:
             return []
         status_excluded = set(self.config.data["policy"]["exclude_by_default"])
@@ -149,15 +202,19 @@ class Retriever:
                     continue
                 if doc_type and doc_type != "any" and payload.get("doc_type") != doc_type:
                     continue
-                row = conn.execute("SELECT * FROM chunks WHERE chunk_id=?", (payload.get("chunk_id"),)).fetchone()
+                if mode == "documents":
+                    row = conn.execute("SELECT * FROM chunks WHERE document_id=? ORDER BY line_start LIMIT 1", (payload.get("document_id"),)).fetchone()
+                else:
+                    row = conn.execute("SELECT * FROM chunks WHERE chunk_id=?", (payload.get("chunk_id"),)).fetchone()
                 if not row:
                     continue
                 out.append(self.row_to_result(row, query, why=["semantic match"], lexical_score=0.0, exact_score=0.0))
                 out[-1].dense_score = float(hit.get("dense_score", hit.get("score", 0.0)))
                 out[-1].sparse_score = float(hit.get("sparse_score", 0.0))
+                out[-1].generator_ranks.update(hit.get("generator_ranks", {}))
         return out
 
-    def alias_and_exact_candidates(self, query: str, repo_area: str | None, include_historical: bool) -> list[SearchResult]:
+    def alias_and_exact_candidates(self, query: str, repo_area: str | None, include_historical: bool, mode: str = "sections") -> list[SearchResult]:
         status_clause, params = self.allowed_status_clause(include_historical)
         out: list[SearchResult] = []
         q = query.strip().lower()
@@ -243,6 +300,61 @@ class Retriever:
                 out.append(self.row_to_result(row, query, exact_score=0.85, why=["path match"]))
         return out
 
+    def entity_candidates(self, query: str, repo_area: str | None, include_historical: bool) -> list[SearchResult]:
+        q = query.strip().lower()
+        terms = tokenize(query)
+        if not terms:
+            return []
+        definition_intent = any(term in {"what", "what's", "cos", "cosa", "definition", "definizione", "define", "naming", "domain", "model", "term", "terms"} for term in terms)
+        fts_query = " OR ".join(terms)
+        out: list[SearchResult] = []
+        with self.catalog.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT e.*, bm25(entities_fts) AS rank
+                FROM entities_fts JOIN entities e ON e.entity_id=entities_fts.entity_id
+                WHERE entities_fts MATCH ?
+                ORDER BY rank LIMIT 30
+                """,
+                (fts_query,),
+            ).fetchall()
+            alias_rows = conn.execute(
+                """
+                SELECT e.*, a.weight, 0.0 AS rank
+                FROM entity_aliases a JOIN entities e ON e.entity_id=a.entity_id
+                WHERE lower(a.alias)=? OR lower(e.term)=?
+                ORDER BY a.weight DESC LIMIT 20
+                """,
+                (q, q),
+            ).fetchall()
+            for row in [*alias_rows, *rows]:
+                lexical = 1.0 / (1.0 + abs(float(row["rank"]))) if "rank" in row.keys() else 0.7
+                exact = 0.95 if str(row["term"]).lower() == q else 0.75 if any(q == str(a).lower() for a in []) else 0.0
+                boost = 0.12 if definition_intent else 0.0
+                result = SearchResult(
+                    path=row["source_path"],
+                    title=row["term"],
+                    status="canonical",
+                    doc_type="definition",
+                    repo_area=repo_area or "any",
+                    authority=float(row["authority"]),
+                    line_start=int(row["line_start"] or 1),
+                    line_end=int(row["line_end"] or row["line_start"] or 1),
+                    heading_path=[row["term"]],
+                    anchor="",
+                    snippet=snippet(row["definition"] or row["term"], query),
+                    score=boost,
+                    lexical_score=min(1.0, lexical + boost),
+                    exact_score=exact,
+                    authority_score=float(row["authority"]),
+                    freshness_score=0.7,
+                    why=["glossary/entity match"] + (["definition intent"] if definition_intent else []),
+                    source_type="glossary",
+                    text_for_rerank=f"Term: {row['term']}\nSource: {row['source_path']}\nDefinition:\n{row['definition']}",
+                )
+                out.append(result)
+        return out
+
     def row_to_result(self, row: Any, query: str, lexical_score: float = 0.0, exact_score: float = 0.0, why: list[str] | None = None) -> SearchResult:
         return SearchResult(
             path=row["path"],
@@ -262,6 +374,7 @@ class Retriever:
             authority_score=float(row["authority"]),
             freshness_score=0.6,
             why=why or [],
+            text_for_rerank=f"{row['title']}\n{' > '.join(json.loads(row['heading_path_json'] or '[]'))}\n{row['text'] or ''}",
         )
 
     def apply_scores(self, results: list[SearchResult], query: str) -> None:
@@ -284,14 +397,14 @@ class Retriever:
                 policy = -0.20
             else:
                 policy = 0.0
+            rrf = self.rrf_from_ranks(r.generator_ranks)
             r.score = max(
                 0.0,
                 min(
                     1.0,
-                    0.30 * r.lexical_score
-                    + 0.07 * r.dense_score
-                    + 0.05 * r.sparse_score
-                    + 0.25 * r.exact_score
+                    0.28 * rrf
+                    + 0.20 * r.lexical_score
+                    + 0.20 * r.exact_score
                     + 0.13 * r.authority_score
                     + 0.10 * r.route_match_score
                     + 0.05 * r.freshness_score
@@ -299,12 +412,18 @@ class Retriever:
                 ),
             )
 
+    def rrf_from_ranks(self, ranks: dict[str, int]) -> float:
+        if not ranks:
+            return 0.0
+        raw = sum(1.0 / (60 + int(rank)) for rank in ranks.values())
+        return min(1.0, raw / (len(ranks) / 61.0))
+
     def try_rerank(self, query: str, results: list[SearchResult]) -> str | None:
         limit = min(int(self.config.data["retrieval"]["rerank_candidates"]), 100, len(results))
         if not limit:
             return None
-        backend = BgeM3LocalBackend.from_locator_config(self.config)
-        pairs = [(query, f"{r.title}\n{' > '.join(r.heading_path)}\n{r.snippet}") for r in results[:limit]]
+        backend = self.backend or BgeM3LocalBackend.from_locator_config(self.config)
+        pairs = [(query, r.text_for_rerank or f"{r.title}\n{' > '.join(r.heading_path)}\n{r.snippet}") for r in results[:limit]]
         scores = backend.rerank_pairs(pairs, normalize=True)
         for r, score in zip(results[:limit], scores):
             r.reranker_score = float(score)
@@ -355,6 +474,7 @@ class Retriever:
             "exact": score(r.exact_score),
         }
         compact = {
+            "source_type": r.source_type,
             "path": r.path,
             "title": r.title,
             "status": r.status,
@@ -380,7 +500,43 @@ class Retriever:
             }
             compact["policy_adjustments"] = r.policy_adjustments
             compact["best_sections"] = [{"heading": " > ".join(r.heading_path), "anchor": r.anchor, "line_start": r.line_start, "line_end": r.line_end}]
+        elif hasattr(r, "best_sections"):
+            compact["best_sections"] = getattr(r, "best_sections")
         return compact
+
+    def attach_best_sections(self, results: list[SearchResult], query: str, include_historical: bool) -> None:
+        if not results:
+            return
+        status_clause, params = self.allowed_status_clause(include_historical)
+        with self.catalog.connect() as conn:
+            for result in results:
+                rows = conn.execute(
+                    f"SELECT * FROM chunks WHERE path=? AND {status_clause} ORDER BY line_start LIMIT 3",
+                    [result.path, *params],
+                ).fetchall()
+                sections = []
+                for row in rows:
+                    sections.append({"heading": " > ".join(json.loads(row["heading_path_json"] or "[]")), "anchor": row["anchor"], "line_start": row["line_start"], "line_end": row["line_end"]})
+                setattr(result, "best_sections", sections)
+
+    def recommended_fix(self, results: list[SearchResult], debug: dict[str, Any]) -> str | None:
+        if results:
+            return None
+        counts = debug.get("candidate_counts", {})
+        if not counts.get("entity"):
+            return "add glossary/entity alias or authority rule for this term"
+        if not counts.get("vector"):
+            return "rebuild semantic index and verify Qdrant collections"
+        return "add aliases, frontmatter status, or narrower heading text"
+
+    def index_state(self) -> dict[str, Any]:
+        try:
+            from .freshness import IndexFreshnessService
+
+            status = IndexFreshnessService(self.config).status(allow_auto_start=False)
+            return {"state": status.get("state"), "safe_to_use": status.get("safe_to_use"), "warnings": status.get("warnings", [])[:5]}
+        except Exception as exc:
+            return {"state": "unknown", "warning": str(exc)}
 
     def exact(self, term: str, repo_area: str | None = None, include_historical: bool = False, max_results: int = 20) -> dict[str, Any]:
         self.catalog.init()
@@ -408,11 +564,16 @@ class Retriever:
         conf = "high" if results and any(term.lower() in r["snippet"].lower() for r in results[:3]) else "medium" if results else "low"
         return {"term": term, "confidence": conf, "results": results[:max_results]}
 
-    def open_doc(self, path: str, heading: str | None = None, line_start: int | None = None, line_end: int | None = None) -> dict[str, Any]:
+    def open_doc(self, path: str, heading: str | None = None, line_start: int | None = None, line_end: int | None = None, max_chars: int = 12000) -> dict[str, Any]:
         normalized = path.replace("\\", "/").lstrip("/")
         target = (self.config.root / normalized).resolve()
-        if not str(target).lower().startswith(str(self.config.root).lower()):
+        try:
+            target.relative_to(self.config.root.resolve())
+        except ValueError as exc:
             raise ValueError("path outside workspace is blocked")
+        doc = self.catalog.doc(normalized)
+        if doc is None:
+            raise FileNotFoundError(f"{normalized} is not in the locator catalog")
         if not target.exists():
             raise FileNotFoundError(normalized)
         lines = target.read_text(encoding="utf-8", errors="ignore").splitlines()
@@ -426,16 +587,23 @@ class Retriever:
                     break
         start = max(1, start)
         end = min(len(lines), max(start, end))
-        doc = self.catalog.doc(normalized) or {}
+        hard_max = 50000
+        max_chars = max(1, min(int(max_chars or 12000), hard_max))
+        content = "\n".join(lines[start - 1 : end])
+        truncated = len(content) > max_chars
+        if truncated:
+            content = content[:max_chars]
         return {
             "path": normalized,
             "title": doc.get("title") or Path(normalized).stem,
             "status": doc.get("status") or "unknown",
             "doc_type": doc.get("doc_type") or "unknown",
             "repo_area": doc.get("repo_area") or "unknown",
-            "content": "\n".join(lines[start - 1 : end]),
+            "content": content,
             "line_start": start,
             "line_end": end,
+            "truncated": truncated,
+            "max_chars": max_chars,
             "citations": [{"path": normalized, "line_start": start, "line_end": end}],
         }
 
@@ -466,18 +634,20 @@ class Retriever:
                 related = [{"path": r["path"], "relation": "same_topic"} for r in rows]
         return {"path": normalized, "links_out": out, "links_in": inc, "supersedes": json.loads(doc["supersedes_json"] or "[]") if doc else [], "replaced_by": doc["replaced_by"] if doc else None, "related_docs": related}
 
-    def explain(self, query: str, path: str) -> dict[str, Any]:
+    def explain(self, query: str, path: str | None = None) -> dict[str, Any]:
         result = self.search(query, max_results=20, verbosity="full")
-        match = next((r for r in result["results"] if r["path"] == path.replace("\\", "/")), None)
+        normalized = path.replace("\\", "/") if path else None
+        match = next((r for r in result["results"] if normalized and r["path"] == normalized), None)
         return {
             "query": query,
             "path": path,
             "explanation": {
-                "matched_by": match["why"] if match else [],
+                "matched_by": match["why"] if match else [item for item, count in result.get("debug", {}).get("candidate_counts", {}).items() if count],
                 "scores": match["signals"] if match else {},
                 "policy": match.get("policy_adjustments", []) if match else [],
                 "is_safe_as_canonical": bool(match and match["status"] in {"canonical", "runbook"}),
-                "warnings": [] if match else ["path_not_in_top_results"],
+                "warnings": [] if match else (["path_not_in_top_results"] if path else ["no_path_requested"]),
+                "debug": result.get("debug", {}),
             },
         }
 

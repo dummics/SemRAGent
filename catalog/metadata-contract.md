@@ -1,11 +1,11 @@
 ---
-id: lf.agent-workflow.doc-locator.metadata-contract
+id: workspace.agent-workflow.doc-locator.metadata-contract
 title: Workspace Docs Locator Metadata Contract
 status: canonical
 doc_type: reference
 repo_area: agent-workflow
 authority: 1.0
-owner: licensing-framework
+owner: workspace
 aliases:
   - doc locator metadata
   - locator frontmatter contract
@@ -47,7 +47,7 @@ Default retrieval policy:
 
 ```yaml
 ---
-id: lf.area.topic-name
+id: workspace.area.topic-name
 title: Human Readable Title
 status: canonical
 doc_type: architecture
@@ -56,7 +56,7 @@ component:
   - licensing
   - activation
 authority: 1.0
-owner: licensing-framework
+owner: workspace
 aliases:
   - activation flow
 canonical_for:

@@ -14,7 +14,10 @@ from .search import Retriever
 def find_workspace(start: Path) -> Path:
     current = start.resolve()
     for parent in [current, *current.parents]:
-        if (parent / "project.json").exists() and (parent / "catalog" / "bootstrap.json").exists():
+        if (parent / ".workspace-docs" / "locator.config.yml").exists():
+            return parent
+    for parent in [current, *current.parents]:
+        if (parent / ".git").exists():
             return parent
     return current
 
@@ -65,6 +68,7 @@ def build_parser() -> argparse.ArgumentParser:
     open_doc.add_argument("--heading", default=None)
     open_doc.add_argument("--line-start", type=int, default=None)
     open_doc.add_argument("--line-end", type=int, default=None)
+    open_doc.add_argument("--max-chars", type=int, default=12000)
 
     sub.add_parser("doctor")
     models = sub.add_parser("models")
@@ -260,7 +264,7 @@ def main(argv: list[str] | None = None) -> int:
         emit(Retriever(config).exact(args.term, args.repo_area, args.include_historical, args.max_results))
         return 0
     if args.command == "open":
-        emit(Retriever(config).open_doc(args.path, args.heading, args.line_start, args.line_end))
+        emit(Retriever(config).open_doc(args.path, args.heading, args.line_start, args.line_end, args.max_chars))
         return 0
     if args.command == "doctor":
         emit(doctor(config))

@@ -61,11 +61,11 @@ class IndexFreshnessService:
             safe_to_use = False
             reasons.append("qdrant_unavailable")
             warnings.append(qdrant_warning or "qdrant_unavailable")
-        elif qdrant_counts.get("chunks", 0) <= 0:
+        elif qdrant_counts.get("chunks", 0) <= 0 or qdrant_counts.get("documents", 0) <= 0:
             state = "blocked"
             safe_to_use = False
-            reasons.append("qdrant_chunks_empty")
-            warnings.append("qdrant_chunks_empty: background index build needed")
+            reasons.append("qdrant_collections_empty")
+            warnings.append("qdrant_collections_empty: background index build needed")
 
         if last_run:
             for field, expected in [
@@ -124,7 +124,13 @@ class IndexFreshnessService:
     def changed_files(self, indexed_commit: str | None) -> list[str]:
         paths: set[str] = set()
         roots = tuple(str(p).replace("\\", "/").rstrip("/") for p in self.config.data["paths"]["docs_roots"])
-        manifests = {str(p).replace("\\", "/") for p in self.config.data["paths"].get("manifest_files", [])}
+        tracked_keys = ["manifest_files", "navigation_files", "generated_index_files", "route_files", "alias_files", "entity_sources"]
+        manifests: set[str] = set()
+        for key in tracked_keys:
+            for value in self.config.data["paths"].get(key, []):
+                norm = str(value).replace("\\", "/")
+                if "*" not in norm:
+                    manifests.add(norm)
 
         def include(path: str) -> bool:
             norm = path.replace("\\", "/")

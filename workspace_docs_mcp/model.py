@@ -16,7 +16,7 @@ class Document:
     doc_type: str
     repo_area: str
     authority: float
-    owner: str = "licensing-framework"
+    owner: str = "workspace"
     aliases: list[str] = field(default_factory=list)
     canonical_for: list[str] = field(default_factory=list)
     supersedes: list[str] = field(default_factory=list)
@@ -80,6 +80,9 @@ class SearchResult:
     reranker_score: float | None = None
     why: list[str] = field(default_factory=list)
     policy_adjustments: list[str] = field(default_factory=list)
+    source_type: str = "document"
+    text_for_rerank: str = ""
+    generator_ranks: dict[str, int] = field(default_factory=dict)
 
     @property
     def citation(self) -> str:

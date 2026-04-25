@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import LocatorConfig
+from .entities import parse_entities
 from .markdown import discover_markdown, git_commit, load_manifest_context, parse_document, rel_path
 from .model import Chunk, Document
 from .vector import VectorIndex
@@ -91,6 +92,23 @@ CREATE TABLE IF NOT EXISTS symbols (
   repo_area TEXT,
   source_kind TEXT
 );
+CREATE TABLE IF NOT EXISTS entities (
+  entity_id TEXT PRIMARY KEY,
+  term TEXT NOT NULL,
+  entity_type TEXT,
+  definition TEXT,
+  source_path TEXT NOT NULL,
+  line_start INTEGER,
+  line_end INTEGER,
+  canonical_docs_json TEXT,
+  authority REAL
+);
+CREATE TABLE IF NOT EXISTS entity_aliases (
+  alias TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  source_path TEXT NOT NULL,
+  weight REAL
+);
 CREATE TABLE IF NOT EXISTS index_runs (
   run_id TEXT PRIMARY KEY,
   started_at TEXT,
@@ -107,6 +125,7 @@ CREATE TABLE IF NOT EXISTS index_runs (
   warnings_json TEXT
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(chunk_id UNINDEXED, path UNINDEXED, title, heading, text, text_for_embedding);
+CREATE VIRTUAL TABLE IF NOT EXISTS entities_fts USING fts5(entity_id UNINDEXED, term, aliases, definition, source_path UNINDEXED);
 """
 
 
@@ -145,7 +164,7 @@ class Catalog:
         warnings: list[str] = []
         errors: list[str] = []
         commit = git_commit(self.config.root)
-        nav_paths, generated_status = load_manifest_context(self.config.root)
+        nav_paths, generated_status = load_manifest_context(self.config)
         docs: list[Document] = []
         chunks: list[Chunk] = []
         links: list[dict[str, Any]] = []
@@ -159,7 +178,7 @@ class Catalog:
             except Exception as exc:
                 errors.append(f"{path}: {exc}")
         with self.connect() as conn:
-            conn.executescript("DELETE FROM documents; DELETE FROM chunks; DELETE FROM links; DELETE FROM aliases; DELETE FROM symbols; DELETE FROM chunks_fts;")
+            conn.executescript("DELETE FROM documents; DELETE FROM chunks; DELETE FROM links; DELETE FROM aliases; DELETE FROM routes; DELETE FROM symbols; DELETE FROM entities; DELETE FROM entity_aliases; DELETE FROM chunks_fts; DELETE FROM entities_fts;")
             for doc in docs:
                 self.upsert_document(conn, doc)
             for chunk in chunks:
@@ -171,6 +190,7 @@ class Catalog:
                 )
             self.load_manual_aliases(conn)
             self.load_routes(conn)
+            self.load_entities(conn)
             self.extract_symbols(conn)
             conn.execute(
                 "INSERT INTO index_runs(run_id,started_at,completed_at,git_commit,embedding_model,embedding_backend,reranker_model,reranker_backend,chunker_version,docs_count,chunks_count,errors_json,warnings_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -274,51 +294,78 @@ class Catalog:
         conn.execute("INSERT INTO chunks_fts(chunk_id,path,title,heading,text,text_for_embedding) VALUES(?,?,?,?,?,?)", (chunk.chunk_id, chunk.path, chunk.title, heading, chunk.text, chunk.text_for_embedding))
 
     def load_routes(self, conn: sqlite3.Connection) -> None:
-        routes_path = self.config.root / "catalog" / "generated" / "agent-routes.json"
-        if not routes_path.exists():
-            return
-        try:
-            data = json.loads(routes_path.read_text(encoding="utf-8"))
-        except Exception:
-            return
         priority = 0
-        for route in data.get("routes", []):
-            route_name = str(route.get("intent", "route"))
-            for item in route.get("entrypoints", []):
-                priority += 1
-                path = str(item.get("path", ""))
-                repo_area = str(item.get("repo", "any"))
-                topic = " ".join([route_name, str(item.get("title", "")), str(item.get("surface", ""))])
-                conn.execute("INSERT INTO routes(route_id,route_name,repo_area,topic,target_path,priority) VALUES(?,?,?,?,?,?)", (f"{route_name}:{priority}", route_name, repo_area, topic, path, priority))
+        for routes_path in self.config.configured_files("route_files"):
+            if not routes_path.exists():
+                continue
+            try:
+                data = json.loads(routes_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            for route in data.get("routes", []):
+                route_name = str(route.get("intent") or route.get("name") or "route")
+                for item in route.get("entrypoints", []):
+                    priority += 1
+                    path = str(item.get("path", "")).replace("\\", "/")
+                    repo_area = str(item.get("repo") or item.get("repo_area") or "any")
+                    topic = " ".join([route_name, str(item.get("title", "")), str(item.get("surface", ""))]).strip()
+                    conn.execute("INSERT INTO routes(route_id,route_name,repo_area,topic,target_path,priority) VALUES(?,?,?,?,?,?)", (f"{route_name}:{priority}", route_name, repo_area, topic, path, priority))
 
     def load_manual_aliases(self, conn: sqlite3.Connection) -> None:
-        aliases_path = self.config.root / ".workspace-docs" / "topic-aliases.json"
-        if not aliases_path.exists():
-            return
-        try:
-            data = json.loads(aliases_path.read_text(encoding="utf-8"))
-        except Exception:
-            return
         priority = 1000
-        for item in data.get("aliases", []):
-            target = str(item.get("target_path", "")).replace("\\", "/")
-            if not target:
+        for aliases_path in self.config.configured_files("alias_files"):
+            if not aliases_path.exists():
                 continue
-            doc = conn.execute("SELECT document_id,path,repo_area FROM documents WHERE path=?", (target,)).fetchone()
-            if not doc:
+            try:
+                data = json.loads(aliases_path.read_text(encoding="utf-8"))
+            except Exception:
                 continue
-            weight = float(item.get("weight", 1.0))
-            repo_area = str(item.get("repo_area") or doc["repo_area"])
-            for alias in item.get("aliases", []):
-                alias_text = str(alias).strip()
-                if not alias_text:
+            for item in data.get("aliases", []):
+                target = str(item.get("target_path", "")).replace("\\", "/")
+                if not target:
                     continue
-                conn.execute("INSERT INTO aliases(alias,document_id,path,weight) VALUES(?,?,?,?)", (alias_text, doc["document_id"], doc["path"], weight))
-                priority += 1
-                conn.execute(
-                    "INSERT INTO routes(route_id,route_name,repo_area,topic,target_path,priority) VALUES(?,?,?,?,?,?)",
-                    (f"manual-alias:{priority}", "manual-alias", repo_area, alias_text, doc["path"], priority),
-                )
+                doc = conn.execute("SELECT document_id,path,repo_area FROM documents WHERE path=?", (target,)).fetchone()
+                if not doc:
+                    continue
+                weight = float(item.get("weight", 1.0))
+                repo_area = str(item.get("repo_area") or doc["repo_area"])
+                for alias in item.get("aliases", []):
+                    alias_text = str(alias).strip()
+                    if not alias_text:
+                        continue
+                    conn.execute("INSERT INTO aliases(alias,document_id,path,weight) VALUES(?,?,?,?)", (alias_text, doc["document_id"], doc["path"], weight))
+                    priority += 1
+                    conn.execute(
+                        "INSERT INTO routes(route_id,route_name,repo_area,topic,target_path,priority) VALUES(?,?,?,?,?,?)",
+                        (f"manual-alias:{priority}", "manual-alias", repo_area, alias_text, doc["path"], priority),
+                    )
+
+    def load_entities(self, conn: sqlite3.Connection) -> None:
+        for entity in parse_entities(self.config):
+            if not entity.term:
+                continue
+            entity_id = f"{entity.source_path}#{entity.term}".lower()
+            aliases = sorted(set([entity.term, *entity.aliases]))
+            conn.execute(
+                "INSERT INTO entities(entity_id,term,entity_type,definition,source_path,line_start,line_end,canonical_docs_json,authority) VALUES(?,?,?,?,?,?,?,?,?)",
+                (
+                    entity_id,
+                    entity.term,
+                    entity.entity_type,
+                    entity.definition,
+                    entity.source_path,
+                    entity.line_start,
+                    entity.line_end,
+                    json.dumps(entity.canonical_docs),
+                    entity.authority,
+                ),
+            )
+            for alias in aliases:
+                conn.execute("INSERT INTO entity_aliases(alias,entity_id,source_path,weight) VALUES(?,?,?,?)", (alias, entity_id, entity.source_path, 1.0 if alias == entity.term else 0.85))
+            conn.execute(
+                "INSERT INTO entities_fts(entity_id,term,aliases,definition,source_path) VALUES(?,?,?,?,?)",
+                (entity_id, entity.term, " ".join(aliases), entity.definition, entity.source_path),
+            )
 
     def extract_symbols(self, conn: sqlite3.Connection) -> None:
         patterns = [
@@ -354,6 +401,7 @@ class Catalog:
                 "chunks": conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0],
                 "links": conn.execute("SELECT COUNT(*) FROM links").fetchone()[0],
                 "symbols": conn.execute("SELECT COUNT(*) FROM symbols").fetchone()[0],
+                "entities": conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0],
                 "by_status": [dict(r) for r in conn.execute("SELECT status, COUNT(*) count FROM documents GROUP BY status ORDER BY count DESC")],
                 "last_run": dict(last_run) if last_run else None,
             }

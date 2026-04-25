@@ -16,7 +16,7 @@ class MarkdownParserTests(unittest.TestCase):
             doc_path.parent.mkdir(parents=True)
             doc_path.write_text(
                 "---\n"
-                "id: lf.server.sample\n"
+                "id: workspace.server.sample\n"
                 "title: Sample Doc\n"
                 "status: canonical\n"
                 "doc_type: architecture\n"

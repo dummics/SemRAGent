@@ -7,10 +7,29 @@ from unittest.mock import patch
 
 from workspace_docs_mcp.catalog import Catalog
 from workspace_docs_mcp.config import load_config
+from workspace_docs_mcp.mcp_server import call_tool
 from workspace_docs_mcp.search import Retriever
+from workspace_docs_mcp.vector import VectorIndex
 
 
 class CatalogSearchTests(unittest.TestCase):
+    def build_basic_catalog(self, root: Path) -> None:
+        docs = root / "docs"
+        (docs / "server").mkdir(parents=True)
+        (docs / "archive").mkdir(parents=True)
+        (docs / "generated").mkdir(parents=True)
+        (root / "catalog").mkdir(exist_ok=True)
+        (root / ".workspace-docs").mkdir(exist_ok=True)
+        (root / ".workspace-docs" / "locator.config.yml").write_text("version: 1\n", encoding="utf-8")
+        (docs / "server" / "canonical.md").write_text(
+            "---\nstatus: canonical\ntitle: Canonical Activation\naliases:\n  - server activation\n---\n# Canonical Activation\n\nLicense activation validates a client request on the server.\n## Server validation\n\nLicenseActivationHandler lives here.\n",
+            encoding="utf-8",
+        )
+        (docs / "archive" / "old.md").write_text("# Old Activation\n\nLicense activation old note.\n", encoding="utf-8")
+        (docs / "generated" / "activation.md").write_text("# Generated Activation\n\nLicense activation generated note.\n", encoding="utf-8")
+        with patch("workspace_docs_mcp.catalog.VectorIndex.rebuild_from_sqlite", return_value={"enabled": False, "reason": "unit-test"}):
+            Catalog(load_config(root)).rebuild()
+
     def test_exact_search_and_historical_filter(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
@@ -46,6 +65,102 @@ class CatalogSearchTests(unittest.TestCase):
             config = load_config(root)
             with self.assertRaises(ValueError):
                 Retriever(config).open_doc("../outside.md")
+
+    def test_open_truncates_large_catalog_content(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            self.build_basic_catalog(root)
+            result = Retriever(load_config(root)).open_doc("docs/server/canonical.md", max_chars=20)
+
+            self.assertTrue(result["truncated"])
+            self.assertLessEqual(len(result["content"]), 20)
+
+    def test_glossary_definition_query_returns_glossary_source(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            (root / "domain-definitions.json").write_text(
+                '{"definitions":[{"term":"Extractor","aliases":["extractor"],"definition":"Extractor packages workspace docs into a canonical artifact.","canonical_docs":["docs/server/canonical.md"]}]}',
+                encoding="utf-8",
+            )
+            self.build_basic_catalog(root)
+            with patch.object(VectorIndex, "search_chunks", return_value=[]):
+                result = Retriever(load_config(root)).search("definition of extractor", max_results=3, rerank=False, verbosity="full")
+
+            self.assertTrue(result["results"])
+            self.assertEqual(result["results"][0]["source_type"], "glossary")
+            self.assertEqual(result["results"][0]["citation"], "domain-definitions.json#L1-L1")
+
+    def test_canonical_beats_historical_and_generated(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            self.build_basic_catalog(root)
+            with patch.object(VectorIndex, "search_chunks", return_value=[]):
+                result = Retriever(load_config(root)).search("license activation", max_results=3, rerank=False)
+
+            self.assertTrue(result["results"])
+            self.assertEqual(result["results"][0]["path"], "docs/server/canonical.md")
+            self.assertNotEqual(result["results"][0]["status"], "generated")
+
+    def test_find_docs_uses_document_card_collection(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            self.build_basic_catalog(root)
+            hit = {
+                "payload": {
+                    "document_id": "workspace.docs.server.canonical.md",
+                    "path": "docs/server/canonical.md",
+                    "status": "canonical",
+                    "repo_area": "framework",
+                    "doc_type": "doc",
+                },
+                "dense_score": 0.8,
+                "sparse_score": 0.7,
+                "generator_ranks": {"dense": 1},
+            }
+            with patch.object(VectorIndex, "search_documents", return_value=[hit]) as docs_search, patch.object(VectorIndex, "search_chunks", return_value=[]) as chunk_search:
+                result = Retriever(load_config(root)).search("server activation", max_results=3, rerank=False, mode="documents")
+
+            docs_search.assert_called_once()
+            chunk_search.assert_not_called()
+            self.assertEqual(result["results"][0]["path"], "docs/server/canonical.md")
+            self.assertIn("best_sections", result["results"][0])
+
+    def test_locate_topic_uses_section_collection(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            self.build_basic_catalog(root)
+            chunk_id = "docs/server/canonical.md#server-validation:8-10"
+            hit = {"payload": {"chunk_id": chunk_id, "status": "canonical", "repo_area": "framework", "doc_type": "doc"}, "dense_score": 0.8, "sparse_score": 0.7, "generator_ranks": {"dense": 1}}
+            with patch.object(VectorIndex, "search_chunks", return_value=[hit]) as chunk_search, patch.object(VectorIndex, "search_documents", return_value=[]) as docs_search:
+                result = Retriever(load_config(root)).search("server validation", max_results=3, rerank=False, mode="sections", dedupe_documents=False)
+
+            chunk_search.assert_called_once()
+            docs_search.assert_not_called()
+            self.assertTrue(result["results"])
+
+    def test_blocked_index_returns_low_confidence_without_fallback(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            self.build_basic_catalog(root)
+            blocked = {"state": "blocked", "safe_to_use": False, "warnings": ["index_missing"], "reasons": ["catalog_missing_or_empty"], "background_index": {"state": "skipped", "reason": "unit-test"}}
+            with patch("workspace_docs_mcp.mcp_server.IndexFreshnessService.status", return_value=blocked):
+                result = call_tool(load_config(root), "find_docs", {"query": "server activation"})
+
+            self.assertEqual(result["search_mode"], "blocked")
+            self.assertEqual(result["confidence"], "low")
+            self.assertEqual(result["results"], [])
+            self.assertIn("owner_action", result)
+
+    def test_usable_stale_caps_confidence_at_medium(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            self.build_basic_catalog(root)
+            stale = {"state": "usable_stale", "safe_to_use": True, "warnings": ["index_stale"], "reasons": ["workspace_docs_changed"], "background_index": {"state": "skipped", "reason": "unit-test"}}
+            with patch("workspace_docs_mcp.mcp_server.IndexFreshnessService.status", return_value=stale), patch.object(VectorIndex, "search_documents", return_value=[]):
+                result = call_tool(load_config(root), "find_docs", {"query": "Canonical Activation", "rerank": False})
+
+            self.assertLessEqual({"low": 0, "medium": 1, "high": 2}[result["confidence"]], 1)
+            self.assertIn("index_usable_stale: confidence capped at medium", result["warnings"])
 
 
 if __name__ == "__main__":

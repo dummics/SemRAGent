@@ -8,10 +8,19 @@ from typing import Any
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "version": 1,
+    "workspace": {
+        "id": "workspace",
+        "owner": "workspace",
+    },
     "paths": {
         "docs_roots": ["docs", "documentation", "runbooks", "adr", "adrs", "catalog", ".workspace-docs"],
         "code_roots": ["src", "app", "server", "client", "tests"],
-        "manifest_files": ["project.json", "package.json", "pyproject.toml", "README.md", "docs/navigation.json", "catalog/bootstrap.json", "domain-definitions.json", "glossary.yml", "glossary.yaml"],
+        "manifest_files": ["project.json", "package.json", "pyproject.toml", "README.md"],
+        "navigation_files": ["docs/navigation.json"],
+        "generated_index_files": ["catalog/generated/docs-index.jsonl"],
+        "route_files": ["catalog/generated/agent-routes.json"],
+        "alias_files": [".workspace-docs/topic-aliases.json"],
+        "entity_sources": ["domain-definitions.json", "glossary.yml", "glossary.yaml", "docs/**/terms.md", "docs/**/standard-definitions.md"],
         "exclude": [".git", "node_modules", "bin", "obj", ".rag", "Library", "Temp", "dist", "build", "docs_old~", ".work"],
     },
     "index": {
@@ -107,6 +116,14 @@ class LocatorConfig:
     def reranker_backend(self) -> str:
         return str(self.data["models"]["reranker_backend"])
 
+    @property
+    def workspace_id(self) -> str:
+        return str(self.data.get("workspace", {}).get("id", "workspace"))
+
+    @property
+    def owner(self) -> str:
+        return str(self.data.get("workspace", {}).get("owner", "workspace"))
+
     def docs_roots(self) -> list[Path]:
         return [self.root / p for p in self.data["paths"]["docs_roots"]]
 
@@ -115,6 +132,19 @@ class LocatorConfig:
 
     def manifest_files(self) -> list[Path]:
         return [self.root / p for p in self.data["paths"].get("manifest_files", [])]
+
+    def configured_files(self, key: str) -> list[Path]:
+        return [self.root / p for p in self.data["paths"].get(key, [])]
+
+    def glob_sources(self, key: str) -> list[Path]:
+        out: list[Path] = []
+        for pattern in self.data["paths"].get(key, []):
+            pattern = str(pattern)
+            if any(ch in pattern for ch in "*?["):
+                out.extend(self.root.glob(pattern))
+            else:
+                out.append(self.root / pattern)
+        return sorted(set(path.resolve() for path in out if path.exists()))
 
     def status_authority(self, status: str) -> float:
         return float(self.data["policy"]["authority"].get(status, self.data["policy"]["authority"]["inferred"]))

@@ -160,11 +160,13 @@ def title_from_lines(path: str, lines: list[str], frontmatter: dict[str, Any]) -
     return Path(path).stem.replace("-", " ").replace("_", " ").title()
 
 
-def load_manifest_context(root: Path) -> tuple[set[str], dict[str, dict[str, Any]]]:
+def load_manifest_context(config: LocatorConfig) -> tuple[set[str], dict[str, dict[str, Any]]]:
+    root = config.root
     nav_paths: set[str] = set()
     generated: dict[str, dict[str, Any]] = {}
-    nav = root / "docs" / "navigation.json"
-    if nav.exists():
+    for nav in config.configured_files("navigation_files"):
+        if not nav.exists():
+            continue
         try:
             data = json.loads(nav.read_text(encoding="utf-8"))
             for doc in data.get("docs", []):
@@ -173,8 +175,9 @@ def load_manifest_context(root: Path) -> tuple[set[str], dict[str, dict[str, Any
                     nav_paths.add(str(doc["path"]).replace("\\", "/"))
         except Exception:
             pass
-    idx = root / "catalog" / "generated" / "docs-index.jsonl"
-    if idx.exists():
+    for idx in config.configured_files("generated_index_files"):
+        if not idx.exists():
+            continue
         for line in idx.read_text(encoding="utf-8", errors="ignore").splitlines():
             try:
                 item = json.loads(line)
@@ -217,7 +220,7 @@ def parse_document(path: Path, config: LocatorConfig, nav_paths: set[str], gener
     repo_area = str(frontmatter.get("repo_area") or infer_repo_area(rp))
     aliases = normalize_list(frontmatter.get("aliases"))
     canonical_for = normalize_list(frontmatter.get("canonical_for"))
-    document_id = str(frontmatter.get("id") or "lf." + re.sub(r"[^a-z0-9]+", ".", rp.lower()).strip("."))
+    document_id = str(frontmatter.get("id") or f"{config.workspace_id}." + re.sub(r"[^a-z0-9]+", ".", rp.lower()).strip("."))
     doc = Document(
         document_id=document_id,
         path=rp,
@@ -226,6 +229,7 @@ def parse_document(path: Path, config: LocatorConfig, nav_paths: set[str], gener
         doc_type=doc_type,
         repo_area=repo_area,
         authority=authority,
+        owner=config.owner,
         aliases=aliases,
         canonical_for=canonical_for,
         supersedes=normalize_list(frontmatter.get("supersedes")),

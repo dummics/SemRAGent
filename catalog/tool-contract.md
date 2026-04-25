@@ -4,15 +4,15 @@ All tools are read-only. All paths are workspace-relative unless explicitly retu
 
 ## `find_docs`
 
-Document-first semantic locator. Use for "where is the doc for X?"
+Document-first semantic locator. Use for "where is the doc for X?" It preflights index freshness and returns `search_mode=blocked` plus `owner_action` instead of silently falling back when the semantic index is unavailable.
 
 ## `locate_topic`
 
-Section-first semantic locator. Use when a heading-level citation is more useful.
+Section-first semantic locator. Use when a heading-level citation is more useful. It uses section chunks first.
 
 ## `open_doc`
 
-Open a safe document slice by path, heading, or line range. Blocks traversal outside the workspace.
+Open a safe catalog-known document slice by path, heading, or line range. Blocks traversal outside the workspace and supports bounded `max_chars` output.
 
 ## `search_exact`
 
@@ -30,7 +30,7 @@ Show links and related docs for one path.
 
 ## `explain_result`
 
-Explain ranking signals, policy adjustments, and safety for one query/path pair.
+Explain ranking signals, candidate counts, active filters, index state, policy adjustments, and safety for one query/path pair. `path` can be null for no-results diagnostics.
 
 ## `index_status`
 

@@ -21,12 +21,14 @@ It is not a chat RAG system. Its job is narrower:
 - No fallback to alternate models.
 - MCP tools are read-only.
 - Agents should use semantic search first: `find_docs` / `locate_topic` -> `open_doc`.
+- Search preflights index freshness. A blocked semantic index returns a clear owner action instead of silently falling back.
+- Glossaries and domain definition files are first-class retrieval sources for definition/naming/domain-model queries.
 
 ## MCP Tools
 
-- `find_docs`: document-first semantic locator.
+- `find_docs`: document-first semantic locator using document cards first.
 - `locate_topic`: section-first semantic locator.
-- `open_doc`: open a returned citation/path.
+- `open_doc`: open a returned catalog-known citation/path with traversal blocking and bounded content.
 - `search_exact`: exact lookup for explicit symbols, paths, config keys, route IDs, or manifest names only.
 - `list_canonical`: list canonical/runbook docs by area/topic.
 - `doc_neighbors`: links and related docs.
@@ -65,6 +67,14 @@ Optional project files:
 - `.workspace-docs/topic-aliases.json`
 - `.workspace-docs/eval-canonical-topics.json`
 - `.workspace-docs/canonical-map.yml`
+
+First-class glossary/entity sources when present:
+
+- `domain-definitions.json`
+- `glossary.yml`
+- `glossary.yaml`
+- `docs/**/terms.md`
+- `docs/**/standard-definitions.md`
 
 The `examples/licensing-framework/` folder contains the real adapter that motivated the tool.
 
@@ -121,6 +131,7 @@ Normal flow:
 Do not use `search_exact`, shell search, or manual generated-index reading as fallback after semantic search fails, is stale, or is blocked.
 If `index_status.state` is `blocked` and `background_index_started/running`, wait briefly and retry the same semantic search.
 If it remains blocked, report the blocker to the owner/operator.
+If `index_status.state` is `usable_stale`, search can continue but confidence is capped at `medium`.
 
 ## GPT Pro Review Package
 

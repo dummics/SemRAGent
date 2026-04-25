@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import unittest
+import inspect
 from pathlib import Path
 
 from workspace_docs_mcp.config import load_config
 from workspace_docs_mcp.local_bge_backend import BgeM3LocalBackend, ModelConfigurationError, lexical_weights_to_qdrant_sparse
+from workspace_docs_mcp.vector import VectorIndex
 
 
 class LocalBgeBackendContractTests(unittest.TestCase):
@@ -28,6 +30,11 @@ class LocalBgeBackendContractTests(unittest.TestCase):
         self.assertIsNotNone(sparse)
         self.assertEqual(sparse.indices, [2, 9])
         self.assertEqual(sparse.values, [1.5, 0.25])
+
+    def test_reranker_is_not_loaded_during_index_build(self) -> None:
+        source = inspect.getsource(VectorIndex.rebuild_from_sqlite)
+
+        self.assertNotIn("load_reranker", source)
 
 
 if __name__ == "__main__":

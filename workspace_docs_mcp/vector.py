@@ -12,8 +12,9 @@ class VectorIndex:
     DENSE_VECTOR = "dense"
     SPARSE_VECTOR = "sparse"
 
-    def __init__(self, config: LocatorConfig):
+    def __init__(self, config: LocatorConfig, backend: BgeM3LocalBackend | None = None):
         self.config = config
+        self.backend = backend
 
     def available(self) -> tuple[bool, str | None]:
         try:
@@ -29,10 +30,8 @@ class VectorIndex:
         from qdrant_client import QdrantClient  # type: ignore
         from qdrant_client.http import models  # type: ignore
 
-        backend = BgeM3LocalBackend.from_locator_config(self.config)
+        backend = self.backend or BgeM3LocalBackend.from_locator_config(self.config)
         backend.load_embedding_model()
-        if self.config.data["models"].get("require_reranker", True):
-            backend.load_reranker()
 
         client = QdrantClient(url=self.config.data["index"]["qdrant_url"])
         docs_collection = self.config.data["index"]["qdrant_collection_docs"]
@@ -163,17 +162,23 @@ class VectorIndex:
             "text_preview": (row["text"] or "")[:1000],
         }
 
+    def search_documents(self, query: str, limit: int = 50, include_sparse: bool = True) -> list[dict[str, Any]]:
+        return self.search_collection(self.config.data["index"]["qdrant_collection_docs"], query, limit, include_sparse, id_key="document_id")
+
     def search_chunks(self, query: str, limit: int = 50, include_sparse: bool = True) -> list[dict[str, Any]]:
+        return self.search_collection(self.config.data["index"]["qdrant_collection_chunks"], query, limit, include_sparse, id_key="chunk_id")
+
+    def search_collection(self, collection: str, query: str, limit: int = 50, include_sparse: bool = True, id_key: str = "chunk_id") -> list[dict[str, Any]]:
         from qdrant_client import QdrantClient  # type: ignore
 
-        backend = BgeM3LocalBackend.from_locator_config(self.config)
+        backend = self.backend or BgeM3LocalBackend.from_locator_config(self.config)
         encoded = backend.encode_queries([query], return_sparse=True)
         dense = encoded["dense"][0]
         sparse = lexical_weights_to_qdrant_sparse(encoded["sparse"][0] if encoded.get("sparse") else None)
         client = QdrantClient(url=self.config.data["index"]["qdrant_url"])
-        collection = self.config.data["index"]["qdrant_collection_chunks"]
 
         hits: dict[str, dict[str, Any]] = {}
+        ranks: dict[str, dict[str, int]] = {}
         dense_response = client.query_points(
             collection_name=collection,
             query=dense,
@@ -181,11 +186,12 @@ class VectorIndex:
             limit=limit,
             with_payload=True,
         )
-        for hit in dense_response.points:
+        for rank, hit in enumerate(dense_response.points, start=1):
             payload = hit.payload or {}
-            chunk_id = str(payload.get("chunk_id") or hit.id)
+            chunk_id = str(payload.get(id_key) or payload.get("chunk_id") or payload.get("document_id") or hit.id)
             hits.setdefault(chunk_id, {"payload": payload, "dense_score": 0.0, "sparse_score": 0.0})
             hits[chunk_id]["dense_score"] = max(float(hit.score), hits[chunk_id]["dense_score"])
+            ranks.setdefault(chunk_id, {})["dense"] = rank
 
         if include_sparse and sparse is not None:
             sparse_response = client.query_points(
@@ -195,15 +201,25 @@ class VectorIndex:
                 limit=limit,
                 with_payload=True,
             )
-            for hit in sparse_response.points:
+            for rank, hit in enumerate(sparse_response.points, start=1):
                 payload = hit.payload or {}
-                chunk_id = str(payload.get("chunk_id") or hit.id)
+                chunk_id = str(payload.get(id_key) or payload.get("chunk_id") or payload.get("document_id") or hit.id)
                 hits.setdefault(chunk_id, {"payload": payload, "dense_score": 0.0, "sparse_score": 0.0})
                 hits[chunk_id]["sparse_score"] = max(float(hit.score), hits[chunk_id]["sparse_score"])
+                ranks.setdefault(chunk_id, {})["sparse"] = rank
 
         fused: list[dict[str, Any]] = []
-        for item in hits.values():
-            item["score"] = 0.6 * item["dense_score"] + 0.4 * item["sparse_score"]
+        for key, item in hits.items():
+            item["generator_ranks"] = ranks.get(key, {})
+            item["score"] = rrf_score(ranks.get(key, {}).values())
             fused.append(item)
         return sorted(fused, key=lambda item: item["score"], reverse=True)[:limit]
+
+
+def rrf_score(ranks, k: int = 60) -> float:
+    values = list(ranks)
+    if not values:
+        return 0.0
+    raw = sum(1.0 / (k + int(rank)) for rank in values)
+    return min(1.0, raw / (len(values) / (k + 1)))
 
