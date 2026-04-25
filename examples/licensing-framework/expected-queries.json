@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "description": "Targeted canonical topic retrieval checks for agent-facing Workspace Docs localization.",
+  "cases": [
+    {
+      "id": "extractor-avatar-identity",
+      "query": "extractor concept definition avatar identity",
+      "repo_area": "framework",
+      "expected_docs": [
+        "docs/framework/business/character-identity-model.md",
+        "docs/cross-component/standard-definitions.md"
+      ],
+      "tags": ["extractor", "avatar-identity", "framework", "curated-alias"]
+    },
+    {
+      "id": "extractor-package-creation",
+      "query": "extractor canonical definition package creation avatar",
+      "repo_area": "client",
+      "expected_docs": [
+        "Assets/Flowyes Licensing System/docs/operations/extractor-module-obfuscation-contract.md"
+      ],
+      "tags": ["extractor", "package-creation", "client", "curated-alias"]
+    },
+    {
+      "id": "package-format",
+      "query": "protected product package format licensingpackage v3",
+      "repo_area": "client",
+      "expected_docs": [
+        "Assets/Flowyes Licensing System/docs/reference/package-format/licensingpackage-v3.md"
+      ],
+      "tags": ["package-format", "client", "curated-alias"]
+    },
+    {
+      "id": "server-validation",
+      "query": "server validation activation flow",
+      "repo_area": "server",
+      "expected_docs": [
+        "docs/cross-component/contracts/api-routes.md"
+      ],
+      "tags": ["server", "api-routes", "cross-component", "curated-alias"]
+    },
+    {
+      "id": "bootstrap-auth-device",
+      "query": "bootstrap auth device contract v3",
+      "repo_area": "framework",
+      "expected_docs": [
+        "docs/cross-component/security/bootstrap-auth-device-contract-v3.md"
+      ],
+      "tags": ["security", "auth", "device", "curated-alias"]
+    },
+    {
+      "id": "client-architecture",
+      "query": "client architecture extractor licensing",
+      "repo_area": "client",
+      "expected_docs": [
+        "docs/client/architecture/client-architecture.md"
+      ],
+      "tags": ["client", "architecture", "extractor", "curated-alias"]
+    }
+  ]
+}
+

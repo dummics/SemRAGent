@@ -1,0 +1,100 @@
+version: 1
+
+paths:
+  docs_roots:
+    - docs
+    - catalog
+    - .codex/skills
+    - .codex/workspace_docs_mcp
+    - server-repo/docs
+    - server-repo/observability
+    - server-repo/postman
+    - Assets/Flowyes Licensing System/docs
+  code_roots:
+    - server-repo/Licensing API
+    - server-repo/LicensingAPI.Tests
+    - Assets/Flowyes Licensing System/Editor
+    - Assets/Flowyes Licensing System/Scripts
+  manifest_files:
+    - project.json
+    - catalog/bootstrap.json
+    - docs/navigation.json
+    - catalog/generated/docs-index.jsonl
+    - catalog/generated/agent-routes.json
+    - catalog/generated/write-targets.json
+    - domain-definitions.json
+  exclude:
+    - .git
+    - node_modules
+    - bin
+    - obj
+    - .rag
+    - Library
+    - Temp
+    - dist
+    - build
+    - docs_old~
+    - .work
+
+index:
+  sqlite_path: .rag/catalog.sqlite
+  qdrant_url: http://localhost:6333
+  qdrant_collection_docs: lf_document_cards
+  qdrant_collection_chunks: lf_section_chunks
+  chunker_version: md-heading-v1
+  max_chunk_tokens: 900
+  min_chunk_tokens: 80
+
+models:
+  embedding_backend: flagembedding_bgem3
+  embedding_model: BAAI/bge-m3
+  reranker_backend: flagembedding_reranker
+  reranker_model: BAAI/bge-reranker-v2-m3
+  allow_model_fallback: false
+  require_exact_model_names: true
+  require_embedding_dimension: 1024
+  require_reranker: true
+  use_fp16: auto
+  query_max_length: 512
+  passage_max_length: 2048
+  max_model_length: 8192
+  local_only: true
+  device: auto
+
+retrieval:
+  default_max_results: 8
+  candidate_limit_dense: 40
+  candidate_limit_lexical: 40
+  rerank_candidates: 50
+  final_top_k: 8
+  include_historical_default: false
+
+policy:
+  authority:
+    canonical: 1.0
+    runbook: 0.9
+    active: 0.8
+    generated: 0.65
+    support: 0.55
+    historical: 0.3
+    deprecated: 0.0
+    archived: 0.0
+    inferred: 0.45
+  exclude_by_default:
+    - deprecated
+    - archived
+  historical_requires_flag: true
+
+confidence:
+  high_min_score: 0.80
+  medium_min_score: 0.55
+  require_valid_citation_for_high: true
+
+auto_index:
+  enabled: true
+  debounce_seconds: 600
+  max_changed_files: 20
+  lock_path: .rag/index.lock
+  last_start_path: .rag/index-worker-last-start.json
+  log_path: .rag/logs/index-worker.log
+

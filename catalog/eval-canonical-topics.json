@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "description": "Project-specific expected queries. Copy this file to .workspace-docs/eval-canonical-topics.json and fill expected docs for your workspace.",
+  "cases": []
+}

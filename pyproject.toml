@@ -1,0 +1,30 @@
+[project]
+name = "workspace-docs-locator"
+version = "0.1.0"
+description = "Local MCP Doc Locator for project workspaces"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+vector = [
+  "qdrant-client>=1.12.0"
+]
+models = [
+  "FlagEmbedding>=1.4.0",
+  "torch>=2.6",
+  "pyarrow>=21,<24"
+]
+yaml = [
+  "PyYAML>=6.0.2"
+]
+mcp = [
+  "mcp>=1.2.0"
+]
+
+[project.scripts]
+workspace-docs = "workspace_docs_mcp.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+

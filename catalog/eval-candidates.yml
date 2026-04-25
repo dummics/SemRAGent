@@ -1,0 +1,32 @@
+version: 1
+notes:
+  - These are candidate eval questions generated from the observed repo map.
+  - They are not promoted to eval-golden until expected_docs are manually confirmed.
+
+cases:
+  - id: candidate-workspace-bootstrap
+    query: where is the workspace bootstrap source of truth?
+    likely_docs:
+      - project.json
+      - catalog/bootstrap.json
+    tags: [agent-workflow, manifest, bootstrap]
+  - id: candidate-server-architecture
+    query: where is the canonical server architecture doc?
+    likely_docs:
+      - docs/server/architecture/server-architecture.md
+    tags: [server, architecture, canonical]
+  - id: candidate-client-architecture
+    query: where is the client architecture documentation?
+    likely_docs:
+      - docs/client/architecture/client-architecture.md
+    tags: [client, architecture, canonical]
+  - id: candidate-security-bootstrap
+    query: bootstrap auth device contract v3
+    likely_docs:
+      - docs/cross-component/security/bootstrap-auth-device-contract-v3.md
+    tags: [security, auth, device]
+  - id: candidate-symbol-system-controller
+    query: SystemController
+    likely_docs: []
+    tags: [exact, symbol, server]
+

@@ -1,0 +1,24 @@
+version: 1
+
+canonical_roots:
+  - docs
+  - documentation
+  - runbooks
+  - adr
+  - adrs
+
+status_inference:
+  canonical:
+    - "docs/**"
+    - "documentation/**"
+  runbook:
+    - "runbooks/**"
+  historical:
+    - "archive/**"
+    - "historical/**"
+    - "docs/archive/**"
+  support:
+    - "notes/**"
+
+notes:
+  - Copy this file into `.workspace-docs/canonical-map.yml` and adapt it per project.

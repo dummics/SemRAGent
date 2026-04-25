@@ -1,0 +1,33 @@
+version: 1
+routes:
+  - route_id: workspace-bootstrap
+    route_name: Workspace Bootstrap
+    repo_area: agent-workflow
+    topic: workspace bootstrap project mapping agent routes docs index
+    target_path: project.json
+    priority: 1
+  - route_id: docs-bootstrap
+    route_name: Docs Bootstrap
+    repo_area: agent-workflow
+    topic: catalog bootstrap generated docs navigation
+    target_path: catalog/bootstrap.json
+    priority: 2
+  - route_id: server-architecture
+    route_name: Server Architecture
+    repo_area: server
+    topic: server architecture api services dotnet
+    target_path: docs/server/architecture/server-architecture.md
+    priority: 10
+  - route_id: client-architecture
+    route_name: Client Architecture
+    repo_area: client
+    topic: client unity architecture licensing extractor package
+    target_path: docs/client/architecture/client-architecture.md
+    priority: 10
+  - route_id: cross-component-security
+    route_name: Cross Component Security
+    repo_area: framework
+    topic: auth session device bootstrap security v3
+    target_path: docs/cross-component/security/README.md
+    priority: 15
+
